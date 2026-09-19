@@ -1,6 +1,6 @@
-const crypto = require("crypto");
+import crypto from "node:crypto";
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   if (req.method !== "GET") {
     return res.status(405).json({
       error: "Method not allowed",
@@ -18,13 +18,13 @@ module.exports = async function handler(req, res) {
 
   const token = crypto.randomUUID();
 
-  // 30 minutes from now.
+  // 30 minutes from now
   // ImageKit requires the expiry to be less than 1 hour in the future.
   const expire = Math.floor(Date.now() / 1000) + 30 * 60;
 
   const signature = crypto
-    .createHmac("sha1", privateKey)
-    .update(token + expire)
+    .createHash("sha1")
+    .update(token + expire + privateKey)
     .digest("hex");
 
   return res.status(200).json({
@@ -33,4 +33,4 @@ module.exports = async function handler(req, res) {
     signature,
     publicKey,
   });
-};
+}
