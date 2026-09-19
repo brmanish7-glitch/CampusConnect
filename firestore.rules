@@ -1,0 +1,58 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Checks that the authenticated user's Firebase Auth
+    // email belongs to the CIT domain.
+    function isCITUser() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email.matches(
+          '^[^@]+@citchennai\\.net$'
+        );
+    }
+
+    // Checks that the authenticated user's email is both
+    // a CIT email and verified.
+    function isVerifiedCITUser() {
+      return isCITUser()
+        && request.auth.token.email_verified == true;
+    }
+
+    // =========================
+    // USER PROFILES
+    // =========================
+    match /users/{userId} {
+
+      // A newly registered CIT user needs to create their
+      // profile before they have verified their email.
+      // They can ONLY create their own profile.
+      allow create: if isCITUser()
+        && request.auth.uid == userId;
+
+      // After verification, users can access and modify
+      // only their own profile.
+      allow read, update, delete: if isVerifiedCITUser()
+        && request.auth.uid == userId;
+    }
+
+    // =========================
+    // COMMUNITY RESOURCES
+    // =========================
+    match /communityResources/{resourceId} {
+
+      // Only verified CIT users can view resources.
+      allow read: if isVerifiedCITUser();
+
+      // Only verified CIT users can create resources,
+      // and the resource must belong to the authenticated user.
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.userId == request.auth.uid;
+
+      // Only the owner of a resource can modify or delete it.
+      allow update, delete: if isVerifiedCITUser()
+        && resource.data.userId == request.auth.uid;
+    }
+  }
+}
