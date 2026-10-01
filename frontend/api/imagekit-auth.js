@@ -1,6 +1,14 @@
-import crypto from "node:crypto";
-import { cert, getApps, initializeApp } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
+const crypto = require("node:crypto");
+
+const {
+  cert,
+  getApps,
+  initializeApp,
+} = require("firebase-admin/app");
+
+const {
+  getAuth,
+} = require("firebase-admin/auth");
 
 function getFirebaseAdminApp() {
   if (getApps().length > 0) {
@@ -9,10 +17,15 @@ function getFirebaseAdminApp() {
 
   const projectId = process.env.FIREBASE_PROJECT_ID;
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(
+    /\\n/g,
+    "\n"
+  );
 
   if (!projectId || !clientEmail || !privateKey) {
-    throw new Error("Firebase Admin environment variables are missing.");
+    throw new Error(
+      "Firebase Admin environment variables are missing."
+    );
   }
 
   return initializeApp({
@@ -24,7 +37,7 @@ function getFirebaseAdminApp() {
   });
 }
 
-export default async function handler(request, response) {
+module.exports = async function handler(request, response) {
   if (request.method !== "GET") {
     return response.status(405).json({
       error: "Method not allowed",
@@ -32,8 +45,8 @@ export default async function handler(request, response) {
   }
 
   try {
-    // Get the Firebase ID token sent by the signed-in CampusConnect user.
-    const authorization = request.headers.authorization || "";
+    const authorization =
+      request.headers.authorization || "";
 
     if (!authorization.startsWith("Bearer ")) {
       return response.status(401).json({
@@ -41,7 +54,9 @@ export default async function handler(request, response) {
       });
     }
 
-    const idToken = authorization.substring("Bearer ".length).trim();
+    const idToken = authorization
+      .substring("Bearer ".length)
+      .trim();
 
     if (!idToken) {
       return response.status(401).json({
@@ -49,9 +64,11 @@ export default async function handler(request, response) {
       });
     }
 
-    // Verify the Firebase ID token.
     const firebaseApp = getFirebaseAdminApp();
-    const decodedToken = await getAuth(firebaseApp).verifyIdToken(idToken);
+
+    const decodedToken = await getAuth(
+      firebaseApp
+    ).verifyIdToken(idToken);
 
     if (!decodedToken.uid) {
       return response.status(401).json({
@@ -59,26 +76,29 @@ export default async function handler(request, response) {
       });
     }
 
-    const privateKey = process.env.IMAGEKIT_PRIVATE_KEY;
-    const publicKey = process.env.IMAGEKIT_PUBLIC_KEY;
+    const privateKey =
+      process.env.IMAGEKIT_PRIVATE_KEY;
+
+    const publicKey =
+      process.env.IMAGEKIT_PUBLIC_KEY;
 
     if (!privateKey || !publicKey) {
-      console.error("ImageKit environment variables are missing.");
+      console.error(
+        "ImageKit environment variables are missing."
+      );
 
       return response.status(500).json({
-        error: "ImageKit configuration is missing on the server.",
+        error:
+          "ImageKit configuration is missing on the server.",
       });
     }
 
-    // ImageKit requires the expiry to be less than one hour
-    // in the future.
-    const expire = Math.floor(Date.now() / 1000) + 30 * 60;
+    const expire =
+      Math.floor(Date.now() / 1000) +
+      30 * 60;
 
-    // Unique token for this upload authentication request.
     const token = crypto.randomUUID();
 
-    // ImageKit authentication signature:
-    // HMAC-SHA1(token + expire) using the private API key.
     const signature = crypto
       .createHmac("sha1", privateKey)
       .update(token + expire)
@@ -91,10 +111,14 @@ export default async function handler(request, response) {
       publicKey,
     });
   } catch (error) {
-    console.error("ImageKit authentication error:", error);
+    console.error(
+      "ImageKit authentication error:",
+      error
+    );
 
-    return response.status(401).json({
-      error: "Unable to authenticate ImageKit upload.",
+    return response.status(500).json({
+      error:
+        "Unable to authenticate ImageKit upload.",
     });
   }
-}
+};
