@@ -29,7 +29,16 @@ Megaphone,
   UserCheck,
   UserX,
   Mail,
+  MessageCircle,
+  MoreVertical,
+  Send,
+  Flag,
+  AlertTriangle,
+  Upload,
+  FileImage,
 } from "lucide-react";
+
+import { upload as imageKitUpload } from "@imagekit/javascript";
 
 import "./App.css";
 
@@ -50,6 +59,7 @@ import {
   doc,
   getDocs,
   getDoc,
+  onSnapshot,
   setDoc,
   addDoc,
   deleteDoc,
@@ -59,6 +69,7 @@ import {
   query,
   where,
   updateDoc,
+  writeBatch,
   arrayUnion,
   arrayRemove,
 } from "firebase/firestore";
@@ -227,9 +238,12 @@ const [teammateDepartmentFilter, setTeammateDepartmentFilter] = useState("");
 const [teammateYearFilter, setTeammateYearFilter] = useState("");
 const [teammateSkillFilter, setTeammateSkillFilter] = useState("");
 const [notificationOpen, setNotificationOpen] = useState(false);
+const [notificationClearLoading, setNotificationClearLoading] = useState(false);
 const [userMenuOpen, setUserMenuOpen] = useState(false);
 const [connectionRequests, setConnectionRequests] = useState([]);
 const [connections, setConnections] = useState([]);
+const [connectionRemoveTarget, setConnectionRemoveTarget] = useState(null);
+const [connectionRequestCancelTarget, setConnectionRequestCancelTarget] = useState(null);
 const [notifications, setNotifications] = useState([]);
 const [teamInvitations, setTeamInvitations] = useState([]);
 const [userTeams, setUserTeams] = useState([]);
@@ -238,12 +252,33 @@ const [teamMemberships, setTeamMemberships] = useState([]);
 const [teamActionLoading, setTeamActionLoading] = useState(false);
 const [connectionActionLoading, setConnectionActionLoading] = useState(false);
 const [teamInviteLoading, setTeamInviteLoading] = useState(false);
+const [teamInviteOpen, setTeamInviteOpen] = useState(false);
+const [teamInviteSearch, setTeamInviteSearch] = useState("");
 const [teamSearchId, setTeamSearchId] = useState("");
 const [selectedTeam, setSelectedTeam] = useState(null);
+const [selectedTeamPreview, setSelectedTeamPreview] = useState(null);
+const [teamPreviewOwner, setTeamPreviewOwner] = useState(null);
+const [teamPreviewMembers, setTeamPreviewMembers] = useState([]);
+const [teamPreviewLoading, setTeamPreviewLoading] = useState(false);
 const [selectedTeamMembers, setSelectedTeamMembers] = useState([]);
 const [selectedTeamPendingInvites, setSelectedTeamPendingInvites] = useState([]);
 const [teamStatusOpen, setTeamStatusOpen] = useState(false);
 const [teamStatusLoading, setTeamStatusLoading] = useState(false);
+const [teamRemoveTarget, setTeamRemoveTarget] = useState(null);
+const [teamDeleteTarget, setTeamDeleteTarget] = useState(null);
+const [teamChatOpen, setTeamChatOpen] = useState(false);
+const [teamChatTeam, setTeamChatTeam] = useState(null);
+const [teamChatMessages, setTeamChatMessages] = useState([]);
+const [teamChatInput, setTeamChatInput] = useState("");
+const [teamChatLoading, setTeamChatLoading] = useState(false);
+const [teamChatSending, setTeamChatSending] = useState(false);
+const [teamChatError, setTeamChatError] = useState("");
+const [teamChatMessageMenu, setTeamChatMessageMenu] = useState(null);
+const [teamChatReportTarget, setTeamChatReportTarget] = useState(null);
+const [teamChatReportReason, setTeamChatReportReason] = useState("");
+const [teamChatReportDescription, setTeamChatReportDescription] = useState("");
+const [teamChatReportSubmitting, setTeamChatReportSubmitting] = useState(false);
+const teamChatMessagesEndRef = useRef(null);
 const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 const [signOutOpen, setSignOutOpen] = useState(false);
 const [communityFilter, setCommunityFilter] = useState("All");
@@ -253,7 +288,16 @@ const [marketplaceOpen, setMarketplaceOpen] = useState(false);
 const [exchangeOpen, setExchangeOpen] = useState(false);
 const [biddingOpen, setBiddingOpen] = useState(false);
 const [profilePageOpen, setProfilePageOpen] = useState(false);
+const [profileNetworkOpen, setProfileNetworkOpen] = useState(false);
+const [profileNetworkTab, setProfileNetworkTab] = useState("requests");
+const [viewedProfile, setViewedProfile] = useState(null);
 const [editProfileOpen, setEditProfileOpen] = useState(false);
+const [profileMedia, setProfileMedia] = useState([]);
+const [profileMediaLoading, setProfileMediaLoading] = useState(false);
+const [profileMediaUploading, setProfileMediaUploading] = useState(false);
+const [profileMediaError, setProfileMediaError] = useState("");
+const [selectedMedia, setSelectedMedia] = useState(null);
+const [mediaGalleryOpen, setMediaGalleryOpen] = useState(false);
 const [profileData, setProfileData] = useState({
   name: "",
   college: "",
@@ -524,15 +568,21 @@ useEffect(() => {
 
         if (data) {
 
-  setProfileData({
-    name: data.name || "",
-    college: data.college || "",
-    department: data.department || "",
-    year: data.year || "",
-    bio: data.bio || "",
-    skills: data.skills || "",
-    campusConnectId: data.campusConnectId || campusConnectId || "",
-  });
+setProfileData({
+  name: data.name || "",
+  college: data.college || "",
+  department: normalizeDepartment(
+    data.department ||
+    data.branch ||
+    data.course ||
+    data.program ||
+    ""
+  ),
+  year: data.year || "",
+  bio: data.bio || "",
+  skills: data.skills || "",
+  campusConnectId: data.campusConnectId || campusConnectId || "",
+});
 
   setActivityData({
     hackathonsJoined: data.hackathonsJoined || 0,
@@ -609,6 +659,27 @@ useEffect(() => {
 }, []);
 
 useEffect(() => {
+  if (!authUser) return;
+
+  const connectionsQuery = query(
+    collection(db, "connections"),
+    where("userIds", "array-contains", authUser.uid)
+  );
+
+  const unsubscribeConnections = onSnapshot(
+    connectionsQuery,
+    (snapshot) => {
+      setConnections(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
+    },
+    (error) => {
+      console.error("CONNECTIONS LIVE UPDATE ERROR:", error);
+    }
+  );
+
+  return () => unsubscribeConnections();
+}, [authUser]);
+
+useEffect(() => {
   if (!authUser) {
     setConnectionRequests([]);
     setConnections([]);
@@ -624,12 +695,11 @@ useEffect(() => {
 
   const loadRelationshipData = async () => {
     try {
-      const [incomingSnap, outgoingSnap, connectionsSnap, notificationsSnap, invitationsSnap, teamsSnap, membershipsSnap] =
+      const [incomingSnap, outgoingSnap, connectionsSnap, invitationsSnap, teamsSnap, membershipsSnap] =
         await Promise.all([
           getDocs(query(collection(db, "connectionRequests"), where("receiverId", "==", authUser.uid))),
           getDocs(query(collection(db, "connectionRequests"), where("senderId", "==", authUser.uid))),
           getDocs(query(collection(db, "connections"), where("userIds", "array-contains", authUser.uid))),
-          getDocs(query(collection(db, "notifications"), where("recipientId", "==", authUser.uid))),
           getDocs(query(collection(db, "teamInvitations"), where("inviteeId", "==", authUser.uid))),
           getDocs(collection(db, "teams")),
           getDocs(query(collection(db, "teamMemberships"), where("memberId", "==", authUser.uid))),
@@ -644,15 +714,6 @@ useEffect(() => {
       setConnectionRequests(Array.from(requestMap.values()));
 
       setConnections(connectionsSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      setNotifications(
-        notificationsSnap.docs
-          .map((d) => ({ id: d.id, ...d.data() }))
-          .sort((a, b) => {
-            const aTime = a.createdAt?.toMillis?.() || 0;
-            const bTime = b.createdAt?.toMillis?.() || 0;
-            return bTime - aTime;
-          })
-      );
       let loadedTeams = teamsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
       // Give older teams a human-friendly Team ID when the current user owns them.
@@ -696,6 +757,344 @@ useEffect(() => {
 
   return () => { cancelled = true; };
 }, [authUser]);
+
+// Keep notifications live so a newly-created notification immediately
+// brings the unread indicator back without requiring a page refresh.
+useEffect(() => {
+  if (!authUser) {
+    setNotifications([]);
+    return;
+  }
+
+  const notificationsQuery = query(
+    collection(db, "notifications"),
+    where("recipientId", "==", authUser.uid)
+  );
+
+  const unsubscribe = onSnapshot(
+    notificationsQuery,
+    (snapshot) => {
+      const nextNotifications = snapshot.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => {
+          const aTime = a.createdAt?.toMillis?.() || 0;
+          const bTime = b.createdAt?.toMillis?.() || 0;
+          return bTime - aTime;
+        });
+
+      setNotifications(nextNotifications);
+    },
+    (error) => {
+      console.error("NOTIFICATION LISTENER ERROR:", error);
+    }
+  );
+
+  return () => unsubscribe();
+}, [authUser]);
+// Keep connection requests live so Accept / Decline
+// appears immediately when another student sends a request.
+useEffect(() => {
+  if (!authUser) {
+    setConnectionRequests([]);
+    return;
+  }
+
+  const incomingQuery = query(
+    collection(db, "connectionRequests"),
+    where("receiverId", "==", authUser.uid)
+  );
+
+  const outgoingQuery = query(
+    collection(db, "connectionRequests"),
+    where("senderId", "==", authUser.uid)
+  );
+
+  let incomingRequests = [];
+  let outgoingRequests = [];
+
+  const updateRequests = () => {
+    const merged = [
+      ...incomingRequests,
+      ...outgoingRequests,
+    ];
+
+    const uniqueRequests = Array.from(
+    new globalThis.Map(
+        merged.map((request) => [request.id, request])
+      ).values()
+    );
+
+    setConnectionRequests(uniqueRequests);
+  };
+
+  const unsubscribeIncoming = onSnapshot(
+    incomingQuery,
+    (snapshot) => {
+      incomingRequests = snapshot.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      }));
+
+      updateRequests();
+    },
+    (error) => {
+      console.error(
+        "INCOMING CONNECTION REQUEST LISTENER ERROR:",
+        error
+      );
+    }
+  );
+
+  const unsubscribeOutgoing = onSnapshot(
+    outgoingQuery,
+    (snapshot) => {
+      outgoingRequests = snapshot.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      }));
+
+      updateRequests();
+    },
+    (error) => {
+      console.error(
+        "OUTGOING CONNECTION REQUEST LISTENER ERROR:",
+        error
+      );
+    }
+  );
+
+  return () => {
+    unsubscribeIncoming();
+    unsubscribeOutgoing();
+  };
+}, [authUser]);
+
+// ================= PROFILE MEDIA =================
+// Profile media is stored in ImageKit and its metadata is stored in Firestore.
+// The current profile (own profile or another student's profile) is loaded live.
+useEffect(() => {
+  const targetUserId = viewedProfile?.id || authUser?.uid;
+
+  if (!targetUserId) {
+    setProfileMedia([]);
+    setProfileMediaLoading(false);
+    setProfileMediaError("");
+    return;
+  }
+
+  let cancelled = false;
+  setProfileMediaLoading(true);
+  setProfileMediaError("");
+
+  const loadProfileMedia = async () => {
+    try {
+      const snapshot = await getDocs(
+        query(
+          collection(db, "profileMedia"),
+          where("userId", "==", targetUserId)
+        )
+      );
+
+      if (cancelled) return;
+
+      const media = snapshot.docs
+        .map((mediaDoc) => ({
+          id: mediaDoc.id,
+          ...mediaDoc.data(),
+        }))
+        .sort((a, b) => {
+          const aTime = a.createdAt?.toMillis?.() || 0;
+          const bTime = b.createdAt?.toMillis?.() || 0;
+          return bTime - aTime;
+        });
+
+      setProfileMedia(media);
+    } catch (error) {
+      console.error("PROFILE MEDIA LOAD ERROR:", error);
+      if (!cancelled) {
+        setProfileMedia([]);
+        setProfileMediaError("Unable to load profile media right now.");
+      }
+    } finally {
+      if (!cancelled) {
+        setProfileMediaLoading(false);
+      }
+    }
+  };
+
+  loadProfileMedia();
+
+  return () => {
+    cancelled = true;
+  };
+}, [authUser, viewedProfile?.id]);
+
+const uploadProfileMedia = async (fileList) => {
+  if (!authUser || !fileList?.length) return;
+
+  const files = Array.from(fileList);
+
+  const invalidFile = files.find((file) => {
+    const validType =
+      file.type?.startsWith("image/") ||
+      file.type === "application/pdf";
+
+    return !validType || file.size > 10 * 1024 * 1024;
+  });
+
+  if (invalidFile) {
+    showActionToast(
+      "Only images or PDF files up to 10 MB each can be uploaded."
+    );
+    return;
+  }
+
+  setProfileMediaUploading(true);
+  setProfileMediaError("");
+
+  try {
+    const firebaseIdToken = await authUser.getIdToken();
+
+    const authResponse = await fetch("/api/imagekit-auth", {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${firebaseIdToken}`,
+      },
+    });
+
+    if (!authResponse.ok) {
+      const authError = await authResponse.text();
+
+      console.error(
+        "IMAGEKIT AUTH ERROR:",
+        authResponse.status,
+        authError
+      );
+
+      throw new Error("IMAGEKIT_AUTH_FAILED");
+    }
+
+    const imageKitAuth = await authResponse.json();
+
+    if (
+      !imageKitAuth.token ||
+      !imageKitAuth.signature ||
+      !imageKitAuth.expire ||
+      !imageKitAuth.publicKey
+    ) {
+      throw new Error("IMAGEKIT_AUTH_RESPONSE_INVALID");
+    }
+
+    for (const file of files) {
+      const safeFileName = file.name.replace(
+        /[^a-zA-Z0-9._-]/g,
+        "_"
+      );
+
+      const fileName = `${authUser.uid}-${Date.now()}-${safeFileName}`;
+
+      const uploaded = await imageKitUpload({
+        file,
+        fileName,
+        publicKey: imageKitAuth.publicKey,
+        signature: imageKitAuth.signature,
+        token: imageKitAuth.token,
+        expire: imageKitAuth.expire,
+        folder: `/campusconnect/profile-media/${authUser.uid}`,
+        useUniqueFileName: true,
+
+        onProgress: (event) => {
+          if (event.total) {
+            const percentage = Math.round(
+              (event.loaded / event.total) * 100
+            );
+
+            console.log(
+              `Uploading ${file.name}: ${percentage}%`
+            );
+          }
+        },
+      });
+
+      console.log("IMAGEKIT UPLOAD SUCCESS:", uploaded);
+
+      const mediaDoc = {
+        userId: authUser.uid,
+        type:
+          file.type === "application/pdf"
+            ? "pdf"
+            : "image",
+        url: uploaded.url,
+        thumbnailUrl:
+          uploaded.thumbnailUrl || uploaded.url,
+        fileId: uploaded.fileId || "",
+        fileName: file.name,
+        mimeType:
+          file.type || "application/octet-stream",
+        title: file.name,
+        createdAt: serverTimestamp(),
+      };
+
+      const mediaRef = await addDoc(
+        collection(db, "profileMedia"),
+        mediaDoc
+      );
+
+      setProfileMedia((prev) => [
+        {
+          id: mediaRef.id,
+          ...mediaDoc,
+          createdAt: {
+            toMillis: () => Date.now(),
+          },
+        },
+        ...prev,
+      ]);
+    }
+
+    showActionToast(
+      files.length === 1
+        ? "Achievement media uploaded successfully."
+        : `${files.length} media files uploaded successfully.`
+    );
+  } catch (error) {
+    console.error(
+      "PROFILE MEDIA UPLOAD ERROR:",
+      error
+    );
+
+    setProfileMediaError(
+      "Unable to upload your media. Please try again."
+    );
+
+    showActionToast(
+      "Media upload failed. Please check your ImageKit configuration."
+    );
+  } finally {
+    setProfileMediaUploading(false);
+  }
+};
+
+const deleteProfileMedia = async (media) => {
+  if (!authUser || !media?.id || media.userId !== authUser.uid) return;
+
+  try {
+    await deleteDoc(doc(db, "profileMedia", media.id));
+    setProfileMedia((prev) =>
+      prev.filter((item) => item.id !== media.id)
+    );
+    setSelectedMedia(null);
+    showActionToast(
+      "Media removed from your profile."
+    );
+  } catch (error) {
+    console.error("PROFILE MEDIA DELETE ERROR:", error);
+    showActionToast(
+      "Unable to remove this media right now."
+    );
+  }
+};
 
 const normalizedCommunitySearch = communitySearch.toLowerCase().trim();
 const [shareResourceOpen, setShareResourceOpen] = useState(false);
@@ -1034,9 +1433,79 @@ const handleCreateTeam = async (e) => {
 };
 
 const getConnectionForStudent = (studentId) => {
+
   return connections.find((connection) =>
     Array.isArray(connection.userIds) && connection.userIds.includes(studentId)
   );
+};
+const removeConnection = async (connection) => {
+  if (!authUser || !connection?.id) return;
+
+  const otherId = connection.userIds?.find(
+    (id) => id !== authUser.uid
+  );
+
+  const person = teammates.find(
+    (item) => item.id === otherId
+  );
+
+  setConnectionRemoveTarget({
+    connection,
+    otherId,
+    personName: person?.name || "this student",
+  });
+};
+const confirmRemoveConnection = async () => {
+  if (!authUser || !connectionRemoveTarget?.connection?.id) return;
+
+  const {
+    connection,
+    otherId,
+    personName,
+  } = connectionRemoveTarget;
+
+  setConnectionActionLoading(true);
+
+  try {
+    await deleteDoc(
+      doc(db, "connections", connection.id)
+    );
+
+    setConnections((prev) =>
+      prev.filter((item) => item.id !== connection.id)
+    );
+
+    if (otherId) {
+      await addDoc(collection(db, "notifications"), {
+        recipientId: otherId,
+        actorId: authUser.uid,
+        actorName:
+          profileData.name ||
+          authUser.email ||
+          "CIT Student",
+        type: "connection_removed",
+        title: "Connection removed",
+        message: `${profileData.name || "A student"} removed you from their connections.`,
+        relatedId: connection.id,
+        read: false,
+        createdAt: serverTimestamp(),
+      });
+    }
+
+    setConnectionRemoveTarget(null);
+
+    showActionToast(
+      `${personName} was removed from your connections.`
+    );
+  } catch (error) {
+    console.error("REMOVE CONNECTION ERROR:", error);
+
+    showActionToast(
+      "Unable to remove the connection. Please try again."
+    );
+  } finally {
+    setConnectionActionLoading(false);
+  }
 };
 
 const getPendingConnectionRequest = (studentId) => {
@@ -1053,6 +1522,30 @@ const getIncomingConnectionRequest = (studentId) => {
       request.receiverId === authUser?.uid &&
       request.status === "pending"
   );
+};
+
+const cancelConnectionRequest = async (request) => {
+  if (!authUser || !request?.id || request.senderId !== authUser.uid || request.status !== "pending") {
+    return;
+  }
+
+  setConnectionActionLoading(true);
+
+  try {
+    await deleteDoc(doc(db, "connectionRequests", request.id));
+
+    setConnectionRequests((prev) =>
+      prev.filter((item) => item.id !== request.id)
+    );
+
+    setConnectionRequestCancelTarget(null);
+    showActionToast("Connection request cancelled.");
+  } catch (error) {
+    console.error("CANCEL CONNECTION REQUEST ERROR:", error);
+    showActionToast("Unable to cancel the connection request. Please try again.");
+  } finally {
+    setConnectionActionLoading(false);
+  }
 };
 
 const sendConnectionRequest = async (student) => {
@@ -1184,6 +1677,56 @@ const respondToConnectionRequest = async (request, decision) => {
   }
 };
 
+const formatNotificationTime = (timestamp) => {
+  if (!timestamp) return "Just now";
+
+  let date = null;
+
+  if (typeof timestamp?.toDate === "function") {
+    date = timestamp.toDate();
+  } else if (timestamp instanceof Date) {
+    date = timestamp;
+  } else if (typeof timestamp === "number") {
+    date = new Date(timestamp);
+  }
+
+  if (!date || Number.isNaN(date.getTime())) {
+    return "Just now";
+  }
+
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSeconds = Math.floor(diffMs / 1000);
+
+  if (diffSeconds < 60) return "Just now";
+
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  if (diffMinutes < 60) {
+    return `${diffMinutes} min${diffMinutes === 1 ? "" : "s"} ago`;
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours} hour${diffHours === 1 ? "" : "s"} ago`;
+  }
+
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+
+  if (date.toDateString() === yesterday.toDateString()) {
+    return `Yesterday, ${date.toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    })}`;
+  }
+
+  return date.toLocaleDateString([], {
+    day: "numeric",
+    month: "short",
+    year: date.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
+  });
+};
+
 const markNotificationRead = async (notification) => {
   if (!notification?.id || notification.read) return;
   try {
@@ -1194,6 +1737,68 @@ const markNotificationRead = async (notification) => {
   } catch (error) {
     console.error("NOTIFICATION READ ERROR:", error);
   }
+};
+
+const openNotifications = async () => {
+  const shouldOpen = !notificationOpen;
+  setNotificationOpen(shouldOpen);
+
+  if (!shouldOpen) return;
+
+  const unreadNotifications = notifications.filter((item) => !item.read);
+  if (unreadNotifications.length === 0) return;
+
+  // Opening the notification panel counts as viewing the notifications.
+  // Mark them read in Firestore so the unread indicator disappears and
+  // stays gone after a refresh. A later new notification will be unread again.
+  try {
+    await Promise.all(
+      unreadNotifications.map((notification) =>
+        updateDoc(doc(db, "notifications", notification.id), { read: true })
+      )
+    );
+
+    setNotifications((prev) =>
+      prev.map((item) => ({ ...item, read: true }))
+    );
+  } catch (error) {
+    console.error("MARK ALL NOTIFICATIONS READ ERROR:", error);
+  }
+};
+
+const clearNotifications = async () => {
+  if (!authUser || notifications.length === 0 || notificationClearLoading) return;
+
+  setNotificationClearLoading(true);
+  try {
+    const validNotifications = notifications.filter((notification) => notification?.id);
+
+    // Firestore batches have a 500-operation limit. Clear in safe chunks so
+    // old notification history can be removed even if the list grows large.
+    for (let start = 0; start < validNotifications.length; start += 450) {
+      const batch = writeBatch(db);
+      validNotifications.slice(start, start + 450).forEach((notification) => {
+        batch.delete(doc(db, "notifications", notification.id));
+      });
+      await batch.commit();
+    }
+
+    setNotifications([]);
+    showActionToast("Notifications cleared.");
+  } catch (error) {
+    console.error("CLEAR NOTIFICATIONS ERROR:", error);
+    showActionToast("Unable to clear notifications. Please try again.");
+  } finally {
+    setNotificationClearLoading(false);
+  }
+};
+
+const scrollToPageTop = () => {
+  requestAnimationFrame(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  });
 };
 
 const joinTeam = async (team) => {
@@ -1212,20 +1817,48 @@ const joinTeam = async (team) => {
   const membershipId = `${team.id}_${authUser.uid}`;
   const teamRef = doc(db, "teams", team.id);
   const membershipRef = doc(db, "teamMemberships", membershipId);
+
   setTeamActionLoading(true);
 
   try {
+    let joinedTeamData = null;
+
     await runTransaction(db, async (transaction) => {
       const teamSnap = await transaction.get(teamRef);
+      const membershipSnap = await transaction.get(membershipRef);
+
       if (!teamSnap.exists()) {
         throw new Error("TEAM_NOT_FOUND");
       }
 
-      const currentTeam = { id: teamSnap.id, ...teamSnap.data() };
+      if (membershipSnap.exists()) {
+        throw new Error("ALREADY_MEMBER");
+      }
+
+      const currentTeam = {
+        id: teamSnap.id,
+        ...teamSnap.data(),
+      };
+
+      // Ignore this user's stale memberIds entry when no real
+      // teamMemberships document exists.
       const currentMemberIds = Array.isArray(currentTeam.memberIds)
-        ? currentTeam.memberIds
-        : [currentTeam.createdBy].filter(Boolean);
+        ? currentTeam.memberIds.filter(
+            (id) => id !== authUser.uid
+          )
+        : [currentTeam.createdBy].filter(
+            (id) => id !== authUser.uid
+          );
+
+      const blockedMemberIds = Array.isArray(currentTeam.blockedMemberIds)
+        ? currentTeam.blockedMemberIds
+        : [];
+
       const maxMembers = Number(currentTeam.members) || 1;
+
+      if (blockedMemberIds.includes(authUser.uid)) {
+        throw new Error("TEAM_BLOCKED");
+      }
 
       if (currentMemberIds.includes(authUser.uid)) {
         throw new Error("ALREADY_MEMBER");
@@ -1238,29 +1871,35 @@ const joinTeam = async (team) => {
       const nextMemberIds = Array.from(
         new Set([...currentMemberIds, authUser.uid].filter(Boolean))
       );
-      const nextCount = nextMemberIds.length;
+
+      const nextStatus =
+        nextMemberIds.length >= maxMembers ? "Full" : "Open";
 
       transaction.update(teamRef, {
         memberIds: nextMemberIds,
-        status: nextCount >= maxMembers ? "Full" : "Open",
+        status: nextStatus,
       });
 
       transaction.set(membershipRef, {
         teamId: team.id,
-        teamTitle: team.title || "Hackathon Team",
+        teamTitle: currentTeam.title || team.title || "Hackathon Team",
         memberId: authUser.uid,
-        memberName: profileData.name || authUser.email || "CIT Student",
+        memberName:
+          profileData.name || authUser.email || "CIT Student",
         role: "member",
         joinedAt: serverTimestamp(),
       });
+
+      joinedTeamData = {
+        ...currentTeam,
+        memberIds: nextMemberIds,
+        status: nextStatus,
+      };
     });
 
     const joinedTeam = {
       ...team,
-      memberIds: Array.from(new Set([
-        ...(Array.isArray(team.memberIds) ? team.memberIds : [team.createdBy].filter(Boolean)),
-        authUser.uid,
-      ])),
+      ...joinedTeamData,
     };
 
     setTeamMemberships((prev) => [
@@ -1270,31 +1909,65 @@ const joinTeam = async (team) => {
         teamId: team.id,
         teamTitle: team.title || "Hackathon Team",
         memberId: authUser.uid,
-        memberName: profileData.name || authUser.email || "CIT Student",
+        memberName:
+          profileData.name || authUser.email || "CIT Student",
         role: "member",
       },
     ]);
 
-    setAllTeams((prev) => prev.map((item) =>
-      item.id === team.id ? joinedTeam : item
-    ));
+    setAllTeams((prev) =>
+      prev.map((item) => (item.id === team.id ? joinedTeam : item))
+    );
 
     setUserTeams((prev) => [
       ...prev.filter((item) => item.id !== team.id),
       joinedTeam,
     ]);
 
+    // Notify the team owner. A notification failure must not undo
+    // an already-successful team join.
+    try {
+      await addDoc(collection(db, "notifications"), {
+        recipientId: team.createdBy,
+        actorId: authUser.uid,
+        actorName:
+          profileData.name || authUser.email || "CIT Student",
+        type: "team_member_joined",
+        title: "New team member",
+        message: `${
+          profileData.name || "A student"
+        } joined ${
+          team.title || "your team"
+        }.`,
+        relatedId: team.id,
+        read: false,
+        createdAt: serverTimestamp(),
+      });
+    } catch (notificationError) {
+      console.error(
+        "TEAM JOIN NOTIFICATION ERROR:",
+        notificationError
+      );
+    }
+
     showActionToast(`You joined ${team.title || "the team"}.`);
   } catch (error) {
     console.error("JOIN TEAM ERROR:", error);
+
     if (error?.message === "TEAM_FULL") {
       showActionToast("This team is already full.");
     } else if (error?.message === "ALREADY_MEMBER") {
       showActionToast("You are already a member of this team.");
     } else if (error?.message === "TEAM_NOT_FOUND") {
       showActionToast("This team could not be found.");
+    } else if (error?.message === "TEAM_BLOCKED") {
+      showActionToast(
+        "You were removed from this team and cannot join it again."
+      );
     } else {
-      showActionToast("Unable to join the team. Please try again.");
+      showActionToast(
+        "Unable to join the team. Please try again."
+      );
     }
   } finally {
     setTeamActionLoading(false);
@@ -1304,55 +1977,446 @@ const joinTeam = async (team) => {
 const openTeamMemberProfile = async (member) => {
   if (!member?.memberId) return;
 
-  if (member.memberId === authUser?.uid) {
-    setSelectedStudent({
-      id: authUser.uid,
-      name: profileData.name || authUser.email || "CIT Student",
-      role: profileData.department || "Student",
-      skills: Array.isArray(profileData.skills)
-        ? profileData.skills
-        : (profileData.skills || "").split(",").map((skill) => skill.trim()).filter(Boolean),
-      status: "Available",
-      email: authUser.email || "",
-      year: profileData.year || "",
-      college: profileData.college || "CIT",
-      bio: profileData.bio || "",
-      campusConnectId: profileData.campusConnectId || "",
-    });
-    return;
-  }
-
-  const teammate = teammates.find((person) => person.id === member.memberId);
-  if (teammate) {
-    setSelectedStudent(teammate);
-    return;
-  }
-
   try {
-    const memberSnap = await getDoc(doc(db, "users", member.memberId));
-    if (!memberSnap.exists()) {
-      showActionToast("Unable to load this member's profile.");
-      return;
+    let data;
+    let memberId = member.memberId;
+
+    if (memberId === authUser?.uid) {
+      data = {
+        name: profileData.name || authUser.email || "CIT Student",
+        college: profileData.college || "",
+        department: profileData.department || "",
+        year: profileData.year || "",
+        bio: profileData.bio || "",
+        skills: profileData.skills || "",
+        campusConnectId: profileData.campusConnectId || "",
+        email: authUser.email || "",
+      };
+    } else {
+      const memberSnap = await getDoc(doc(db, "users", memberId));
+      if (!memberSnap.exists()) {
+        showActionToast("Unable to load this member's profile.");
+        return;
+      }
+      data = memberSnap.data();
     }
 
-    const data = memberSnap.data();
-    setSelectedStudent({
-      id: memberSnap.id,
-      name: data.name || data.email?.split("@")[0] || member.memberName || "CIT Student",
-      role: normalizeDepartment(data.department || "") || "Student",
-      skills: Array.isArray(data.skills)
-        ? data.skills
-        : (data.skills || "").split(",").map((skill) => skill.trim()).filter(Boolean),
-      status: data.status || "Available",
-      email: data.email || "",
-      year: data.year || "",
-      college: data.college || "",
-      bio: data.bio || "",
-      campusConnectId: data.campusConnectId || "",
-    });
+    setSelectedStudent(null);
+    setSelectedTeamPreview(null);
+    setTeamStatusOpen(false);
+    setSelectedTeam(null);
+    setTeamInviteOpen(false);
+    setTeamInviteSearch("");
+    setProfileNetworkOpen(false);
+setViewedProfile({
+  id: memberId,
+  name:
+    data.name ||
+    data.email?.split("@")[0] ||
+    member.memberName ||
+    "CIT Student",
+
+  role:
+    normalizeDepartment(
+      data.department ||
+      data.branch ||
+      data.course ||
+      data.program ||
+      ""
+    ) || "Student",
+
+  department: normalizeDepartment(
+    data.department ||
+    data.branch ||
+    data.course ||
+    data.program ||
+    ""
+  ),
+
+  skills: Array.isArray(data.skills)
+    ? data.skills
+    : (data.skills || "")
+        .split(",")
+        .map((skill) => skill.trim())
+        .filter(Boolean),
+
+  status: data.status || "Available",
+
+  email: data.email || "",
+
+  year: data.year || "",
+
+  college: data.college || "",
+
+  bio: data.bio || "",
+
+  campusConnectId: data.campusConnectId || "",
+
+  activityData: {
+    hackathonsJoined: Number(data.hackathonsJoined) || 0,
+    teamsCreated: Number(data.teamsCreated) || 0,
+    resourcesShared: Number(data.resourcesShared) || 0,
+    eventsAttended: Number(data.eventsAttended) || 0,
+  },
+});
+    setProfilePageOpen(true);
+    setActiveNav("profile");
+    scrollToPageTop();
   } catch (error) {
     console.error("TEAM MEMBER PROFILE ERROR:", error);
     showActionToast("Unable to load this member's profile.");
+  }
+};
+
+const openTeamPreview = async (team) => {
+  if (!team?.id) return;
+
+  setSelectedTeamPreview(team);
+  setTeamPreviewOwner(null);
+  setTeamPreviewMembers([]);
+  setTeamPreviewLoading(true);
+
+  try {
+    const latestSnap = await getDoc(doc(db, "teams", team.id));
+    const latestTeam = latestSnap.exists()
+      ? { id: latestSnap.id, ...latestSnap.data() }
+      : team;
+
+    setSelectedTeamPreview(latestTeam);
+
+    const memberIds = Array.from(new Set([
+      ...(Array.isArray(latestTeam.memberIds) ? latestTeam.memberIds : []),
+      latestTeam.createdBy,
+    ].filter(Boolean)));
+
+    const profileSnaps = await Promise.all(
+      memberIds.map((id) => getDoc(doc(db, "users", id)))
+    );
+
+    const members = profileSnaps
+      .map((snap, index) => ({
+        id: memberIds[index],
+        ...(snap.exists() ? snap.data() : {}),
+      }))
+      .filter((person) => person.id);
+
+    const owner = members.find((person) => person.id === latestTeam.createdBy) || {
+      id: latestTeam.createdBy,
+      name: latestTeam.createdByName || "Team Leader",
+      department: "",
+      year: "",
+      campusConnectId: "",
+    };
+
+    setTeamPreviewOwner(owner);
+    setTeamPreviewMembers(members.filter((person) => person.id !== latestTeam.createdBy));
+  } catch (error) {
+    console.error("TEAM PREVIEW LOAD ERROR:", error);
+    showActionToast("Unable to load team details.");
+  } finally {
+    setTeamPreviewLoading(false);
+  }
+};
+
+const closeTeamPreview = () => {
+  setSelectedTeamPreview(null);
+  setTeamPreviewOwner(null);
+  setTeamPreviewMembers([]);
+};
+
+const removeTeamMember = (team, member) => {
+  if (!authUser || !team?.id || !member?.memberId || team.createdBy !== authUser.uid) return;
+  if (member.memberId === authUser.uid) {
+    showActionToast("The team owner cannot be removed.");
+    return;
+  }
+  setTeamRemoveTarget({ team, member });
+};
+
+const confirmRemoveTeamMember = async () => {
+  const target = teamRemoveTarget;
+
+  if (!target?.team || !target?.member) return;
+
+  setTeamRemoveTarget(null);
+
+  const { team, member } = target;
+  setTeamActionLoading(true);
+
+  try {
+    const teamRef = doc(db, "teams", team.id);
+    const latestSnap = await getDoc(teamRef);
+
+    if (!latestSnap.exists()) {
+      throw new Error("TEAM_NOT_FOUND");
+    }
+
+    const latestTeam = {
+      id: latestSnap.id,
+      ...latestSnap.data(),
+    };
+
+    const currentIds = Array.isArray(latestTeam.memberIds)
+      ? latestTeam.memberIds
+      : [latestTeam.createdBy].filter(Boolean);
+
+    if (!currentIds.includes(member.memberId)) {
+      throw new Error("MEMBER_NOT_FOUND");
+    }
+
+    const nextIds = currentIds.filter(
+      (id) => id !== member.memberId
+    );
+
+    const blockedMemberIds = Array.from(
+      new Set([
+        ...(Array.isArray(latestTeam.blockedMemberIds)
+          ? latestTeam.blockedMemberIds
+          : []),
+        member.memberId,
+      ])
+    );
+
+    const removeBatch = writeBatch(db);
+
+    removeBatch.update(teamRef, {
+      memberIds: nextIds,
+      blockedMemberIds,
+      status:
+        nextIds.length >= (Number(latestTeam.members) || 1)
+          ? "Full"
+          : "Open",
+    });
+
+    removeBatch.delete(
+      doc(
+        db,
+        "teamMemberships",
+        `${team.id}_${member.memberId}`
+      )
+    );
+
+    await removeBatch.commit();
+
+    // Notify the removed member. Notification failure must not make
+    // a successful removal appear to have failed.
+    try {
+      await addDoc(collection(db, "notifications"), {
+        recipientId: member.memberId,
+        actorId: authUser.uid,
+        actorName:
+          profileData.name || authUser.email || "Team Owner",
+        type: "team_member_removed",
+        title: "Removed from team",
+        message: `You were removed from ${
+          latestTeam.title || "the team"
+        }.`,
+        relatedId: team.id,
+        read: false,
+        createdAt: serverTimestamp(),
+      });
+    } catch (notificationError) {
+      console.error(
+        "TEAM MEMBER REMOVAL NOTIFICATION ERROR:",
+        notificationError
+      );
+    }
+
+    const updatedTeam = {
+      ...latestTeam,
+      memberIds: nextIds,
+      blockedMemberIds,
+    };
+
+    setSelectedTeam(updatedTeam);
+
+    setAllTeams((prev) =>
+      prev.map((item) =>
+        item.id === team.id ? updatedTeam : item
+      )
+    );
+
+    setUserTeams((prev) =>
+      prev.map((item) =>
+        item.id === team.id ? updatedTeam : item
+      )
+    );
+
+    setSelectedTeamMembers((prev) =>
+      prev.filter(
+        (item) => item.memberId !== member.memberId
+      )
+    );
+
+    setTeamMemberships((prev) =>
+      prev.filter(
+        (item) =>
+          item.id !== `${team.id}_${member.memberId}`
+      )
+    );
+
+    showActionToast(
+      `${member.memberName || "Member"} was removed from the team.`
+    );
+  } catch (error) {
+    console.error("REMOVE TEAM MEMBER ERROR:", error);
+
+    if (error?.message === "TEAM_NOT_FOUND") {
+      showActionToast("This team could not be found.");
+    } else if (error?.message === "MEMBER_NOT_FOUND") {
+      showActionToast("This member is no longer in the team.");
+    } else {
+      showActionToast(
+        "Unable to remove the team member. Please try again."
+      );
+    }
+  } finally {
+    setTeamActionLoading(false);
+  }
+};
+
+const deleteTeam = (team) => {
+  if (!authUser || !team?.id || team.createdBy !== authUser.uid) return;
+  setTeamDeleteTarget(team);
+};
+
+const confirmDeleteTeam = async () => {
+  const team = teamDeleteTarget;
+
+  if (!team) return;
+
+  setTeamDeleteTarget(null);
+  setTeamActionLoading(true);
+
+  try {
+    const teamSnap = await getDoc(doc(db, "teams", team.id));
+
+    if (!teamSnap.exists()) {
+      throw new Error("TEAM_NOT_FOUND");
+    }
+
+    const teamData = teamSnap.data();
+
+    if (teamData.createdBy !== authUser.uid) {
+      throw new Error("NOT_TEAM_OWNER");
+    }
+
+    const memberIds = Array.from(
+      new Set([
+        ...(Array.isArray(teamData.memberIds)
+          ? teamData.memberIds
+          : []),
+        teamData.createdBy,
+      ].filter(Boolean))
+    );
+
+    const membershipsSnap = await getDocs(
+      query(
+        collection(db, "teamMemberships"),
+        where("teamId", "==", team.id)
+      )
+    );
+
+    const invitationsSnap = await getDocs(
+      query(
+        collection(db, "teamInvitations"),
+        where("teamId", "==", team.id)
+      )
+    );
+
+    const documentsToDelete = [
+      ...membershipsSnap.docs.map((item) => item.ref),
+      ...invitationsSnap.docs.map((item) => item.ref),
+      doc(db, "teams", team.id),
+    ];
+
+    // Firestore batches have a 500-operation limit.
+    for (
+      let startIndex = 0;
+      startIndex < documentsToDelete.length;
+      startIndex += 450
+    ) {
+      const batch = writeBatch(db);
+
+      documentsToDelete
+        .slice(startIndex, startIndex + 450)
+        .forEach((ref) => batch.delete(ref));
+
+      await batch.commit();
+    }
+
+    // Notify former members after the team itself has been deleted.
+    // These notifications are best-effort and do not affect deletion.
+    const otherMemberIds = memberIds.filter(
+      (id) => id !== authUser.uid
+    );
+
+    await Promise.all(
+      otherMemberIds.map(async (recipientId) => {
+        try {
+          await addDoc(collection(db, "notifications"), {
+            recipientId,
+            actorId: authUser.uid,
+            actorName:
+              profileData.name ||
+              authUser.email ||
+              "Team Owner",
+            type: "team_deleted",
+            title: "Team deleted",
+            message: `${
+              team.title || "A team"
+            } has been deleted by the team owner.`,
+            relatedId: team.id,
+            read: false,
+            createdAt: serverTimestamp(),
+          });
+        } catch (notificationError) {
+          console.error(
+            "TEAM DELETE NOTIFICATION ERROR:",
+            notificationError
+          );
+        }
+      })
+    );
+
+    setAllTeams((prev) =>
+      prev.filter((item) => item.id !== team.id)
+    );
+
+    setUserTeams((prev) =>
+      prev.filter((item) => item.id !== team.id)
+    );
+
+    setTeamMemberships((prev) =>
+      prev.filter((item) => item.teamId !== team.id)
+    );
+
+    setSelectedTeamMembers([]);
+    setSelectedTeamPendingInvites([]);
+    setSelectedTeam(null);
+    setTeamStatusOpen(false);
+
+    showActionToast("Team deleted successfully.");
+  } catch (error) {
+    console.error("DELETE TEAM ERROR:", error);
+
+    if (error?.code === "permission-denied") {
+      showActionToast(
+        "Firebase denied team deletion. Make sure the latest Firestore rules are published."
+      );
+    } else if (error?.message === "TEAM_NOT_FOUND") {
+      showActionToast("This team could not be found.");
+    } else if (error?.message === "NOT_TEAM_OWNER") {
+      showActionToast(
+        "Only the team owner can delete this team."
+      );
+    } else {
+      showActionToast(
+        "Unable to delete the team. Please try again."
+      );
+    }
+  } finally {
+    setTeamActionLoading(false);
   }
 };
 
@@ -1366,10 +2430,13 @@ const openTeamStatus = async (team) => {
   setTeamStatusLoading(true);
 
   try {
-    // Get the latest team document so Team Status always uses
-    // the newest memberIds from Firestore.
+    // Always read the latest team document first.
     const teamRef = doc(db, "teams", team.id);
-    const teamSnap = await getDoc(teamRef);
+    const teamSnap = await withTimeout(
+      getDoc(teamRef),
+      10000,
+      "Team status load"
+    );
 
     if (!teamSnap.exists()) {
       throw new Error("TEAM_NOT_FOUND");
@@ -1382,56 +2449,119 @@ const openTeamStatus = async (team) => {
 
     setSelectedTeam(latestTeam);
 
-    // memberIds is the authoritative list of people currently
-    // belonging to the team.
-    const memberIds = Array.from(
-      new Set(
-        [
-          ...(Array.isArray(latestTeam.memberIds)
-            ? latestTeam.memberIds
-            : []),
-          latestTeam.createdBy,
-        ].filter(Boolean)
-      )
+    /*
+     * IMPORTANT:
+     * teamMemberships is the source of truth for actual membership.
+     *
+     * memberIds can contain stale IDs from an older version of the app.
+     * If we use memberIds alone, a student can incorrectly appear as
+     * "Joined" even though their teamMemberships document is gone.
+     *
+     * The owner is always included separately because owners do not need
+     * a teamMemberships document.
+     */
+    const membershipsSnap = await withTimeout(
+      getDocs(
+        query(
+          collection(db, "teamMemberships"),
+          where("teamId", "==", latestTeam.id)
+        )
+      ),
+      10000,
+      "Team membership load"
     );
 
-    // Build the member list from the users already loaded by the app.
-    const rows = memberIds.map((memberId) => {
-      if (memberId === latestTeam.createdBy) {
-        return {
-          id: `owner_${latestTeam.id}`,
-          memberId,
-          memberName:
-            latestTeam.createdByName ||
-            profileData.name ||
-            authUser.email ||
-            "Team Owner",
-          role: "owner",
-        };
-      }
+    const membershipRows = membershipsSnap.docs.map((membershipDoc) => ({
+      id: membershipDoc.id,
+      ...membershipDoc.data(),
+    }));
 
-      const teammate = teammates.find(
-        (person) => person.id === memberId
-      );
+    const actualMemberIds = Array.from(
+      new Set([
+        latestTeam.createdBy,
+        ...membershipRows
+          .map((membership) => membership.memberId)
+          .filter(Boolean),
+      ].filter(Boolean))
+    );
 
-      return {
-        id: `member_${memberId}`,
-        memberId,
-        memberName: teammate?.name || "CIT Student",
-        role: "member",
-      };
-    });
+    const rows = await Promise.all(
+      actualMemberIds.map(async (memberId) => {
+        if (memberId === latestTeam.createdBy) {
+          return {
+            id: `owner_${latestTeam.id}`,
+            memberId,
+            memberName:
+              profileData.name ||
+              latestTeam.createdByName ||
+              authUser.email ||
+              "Team Owner",
+            role: "owner",
+          };
+        }
+
+        const membership = membershipRows.find(
+          (item) => item.memberId === memberId
+        );
+
+        try {
+          const memberSnap = await withTimeout(
+            getDoc(doc(db, "users", memberId)),
+            10000,
+            "Member profile load"
+          );
+
+          const data = memberSnap.exists() ? memberSnap.data() : {};
+          const fallback = teammates.find(
+            (person) => person.id === memberId
+          );
+
+          return {
+            id: `member_${memberId}`,
+            memberId,
+            memberName:
+              data.name ||
+              data.email?.split("@")[0] ||
+              membership?.memberName ||
+              fallback?.name ||
+              "CIT Student",
+            role: membership?.role || "member",
+          };
+        } catch (memberError) {
+          console.error("TEAM MEMBER LOAD ERROR:", memberError);
+
+          const fallback = teammates.find(
+            (person) => person.id === memberId
+          );
+
+          return {
+            id: `member_${memberId}`,
+            memberId,
+            memberName:
+              membership?.memberName ||
+              fallback?.name ||
+              "CIT Student",
+            role: membership?.role || "member",
+          };
+        }
+      })
+    );
 
     setSelectedTeamMembers(rows);
 
-    // Load invitations separately so an invitation read problem
-    // can never prevent the member list from appearing.
+    // Only PENDING invitations are shown as pending.
+    // An "accepted" invitation by itself does NOT mean the student
+    // is currently a team member; the membership document must exist.
     try {
-      const invitationsSnap = await getDocs(
-        query(
-          collection(db, "teamInvitations"),
-          where("teamId", "==", latestTeam.id)
-        )
+      const invitationsSnap = await withTimeout(
+        getDocs(
+          query(
+            collection(db, "teamInvitations"),
+            where("teamId", "==", latestTeam.id)
+          )
+        ),
+        10000,
+        "Team invitation status load"
       );
 
       const pendingInvites = invitationsSnap.docs
@@ -1450,7 +2580,6 @@ const openTeamStatus = async (team) => {
         inviteError
       );
 
-      // Keep the team status working even if invitation loading fails.
       setSelectedTeamPendingInvites([]);
     }
   } catch (error) {
@@ -1466,21 +2595,32 @@ const openTeamStatus = async (team) => {
   }
 };
 
+
 const leaveTeam = async (team) => {
   if (!authUser || !team?.id) return;
 
   if (team.createdBy === authUser.uid) {
-    showActionToast("Team owners cannot leave their own team.");
+    showActionToast(
+      "Team owners cannot leave their own team."
+    );
     return;
   }
 
   setTeamActionLoading(true);
+
   const membershipId = `${team.id}_${authUser.uid}`;
 
   try {
+    let latestTeamData = null;
+
     await runTransaction(db, async (transaction) => {
       const teamRef = doc(db, "teams", team.id);
-      const membershipRef = doc(db, "teamMemberships", membershipId);
+      const membershipRef = doc(
+        db,
+        "teamMemberships",
+        membershipId
+      );
+
       const teamSnap = await transaction.get(teamRef);
 
       if (!teamSnap.exists()) {
@@ -1488,180 +2628,1044 @@ const leaveTeam = async (team) => {
       }
 
       const currentTeam = teamSnap.data();
-      const currentMemberIds = Array.isArray(currentTeam.memberIds)
+
+      const currentMemberIds = Array.isArray(
+        currentTeam.memberIds
+      )
         ? currentTeam.memberIds
         : [currentTeam.createdBy].filter(Boolean);
 
+      if (!currentMemberIds.includes(authUser.uid)) {
+        throw new Error("NOT_MEMBER");
+      }
+
+      const nextMemberIds = currentMemberIds.filter(
+        (id) => id !== authUser.uid
+      );
+
       transaction.update(teamRef, {
-        memberIds: arrayRemove(authUser.uid),
+        memberIds: nextMemberIds,
         status: "Open",
       });
+
       transaction.delete(membershipRef);
+
+      latestTeamData = {
+        ...currentTeam,
+        memberIds: nextMemberIds,
+        status: "Open",
+      };
     });
 
-    setTeamMemberships((prev) => prev.filter((item) => item.id !== membershipId));
-    setUserTeams((prev) => prev.filter((item) => item.id !== team.id));
-    setAllTeams((prev) => prev.map((item) => item.id === team.id
-      ? { ...item, memberIds: (item.memberIds || []).filter((id) => id !== authUser.uid), status: "Open" }
-      : item
-    ));
-    showActionToast(`You left ${team.title || "the team"}.`);
+    setTeamMemberships((prev) =>
+      prev.filter((item) => item.id !== membershipId)
+    );
+
+    setUserTeams((prev) =>
+      prev.filter((item) => item.id !== team.id)
+    );
+
+    setAllTeams((prev) =>
+      prev.map((item) =>
+        item.id === team.id
+          ? {
+              ...item,
+              ...(latestTeamData || {}),
+              memberIds: (
+                latestTeamData?.memberIds ||
+                item.memberIds ||
+                []
+              ).filter((id) => id !== authUser.uid),
+              status: "Open",
+            }
+          : item
+      )
+    );
+
+    // Notify the team owner. Notification failure must not make
+    // a successful leave appear to have failed.
+    try {
+      await addDoc(collection(db, "notifications"), {
+        recipientId: team.createdBy,
+        actorId: authUser.uid,
+        actorName:
+          profileData.name || authUser.email || "CIT Student",
+        type: "team_member_left",
+        title: "Team member left",
+        message: `${
+          profileData.name || "A student"
+        } left ${
+          team.title || "your team"
+        }.`,
+        relatedId: team.id,
+        read: false,
+        createdAt: serverTimestamp(),
+      });
+    } catch (notificationError) {
+      console.error(
+        "TEAM LEAVE NOTIFICATION ERROR:",
+        notificationError
+      );
+    }
+
+    showActionToast(
+      `You left ${team.title || "the team"}.`
+    );
   } catch (error) {
     console.error("LEAVE TEAM ERROR:", error);
-    showActionToast("Unable to leave the team. Please try again.");
+
+    if (error?.message === "TEAM_NOT_FOUND") {
+      showActionToast("This team could not be found.");
+    } else if (error?.message === "NOT_MEMBER") {
+      showActionToast(
+        "You are no longer a member of this team."
+      );
+    } else {
+      showActionToast(
+        "Unable to leave the team. Please try again."
+      );
+    }
   } finally {
     setTeamActionLoading(false);
   }
 };
 
-const inviteStudentToTeam = async (student, team) => {
-  if (!authUser || !student?.id || !team?.id) return;
-  if (!getConnectionForStudent(student.id)) {
-    showActionToast("Connect with the student before inviting them to a team.");
+
+const openTeamChat = async (team) => {
+  if (!authUser || !team?.id) return;
+
+  setTeamChatLoading(true);
+  setTeamChatError("");
+  setTeamChatMessages([]);
+
+  try {
+    const teamRef = doc(db, "teams", team.id);
+    const teamSnap = await withTimeout(
+      getDoc(teamRef),
+      10000,
+      "Team chat team check"
+    );
+
+    if (!teamSnap.exists()) {
+      throw new Error("TEAM_NOT_FOUND");
+    }
+
+    const latestTeam = {
+      id: teamSnap.id,
+      ...teamSnap.data(),
+    };
+
+    const isOwner = latestTeam.createdBy === authUser.uid;
+
+    if (!isOwner) {
+      const membershipSnap = await withTimeout(
+        getDoc(
+          doc(
+            db,
+            "teamMemberships",
+            `${latestTeam.id}_${authUser.uid}`
+          )
+        ),
+        10000,
+        "Team chat membership check"
+      );
+
+      if (!membershipSnap.exists()) {
+        throw new Error("NOT_TEAM_MEMBER");
+      }
+    }
+
+    setTeamChatTeam(latestTeam);
+    setTeamChatOpen(true);
+    setTeamChatMessageMenu(null);
+  } catch (error) {
+    console.error("TEAM CHAT OPEN ERROR:", error);
+
+    if (error?.message === "TEAM_NOT_FOUND") {
+      showActionToast("This team could not be found.");
+    } else if (error?.message === "NOT_TEAM_MEMBER") {
+      showActionToast("You are no longer a member of this team.");
+    } else {
+      showActionToast("Unable to open team chat. Please try again.");
+    }
+  } finally {
+    setTeamChatLoading(false);
+  }
+};
+
+const closeTeamChat = () => {
+  setTeamChatOpen(false);
+  setTeamChatTeam(null);
+  setTeamChatMessages([]);
+  setTeamChatInput("");
+  setTeamChatError("");
+  setTeamChatMessageMenu(null);
+};
+
+useEffect(() => {
+  if (!teamChatOpen || !teamChatTeam?.id || !authUser) return undefined;
+
+  setTeamChatLoading(true);
+  setTeamChatError("");
+
+  const messagesRef = collection(
+    db,
+    "teamChats",
+    teamChatTeam.id,
+    "messages"
+  );
+
+  const unsubscribe = onSnapshot(
+    messagesRef,
+    (snapshot) => {
+      const messages = snapshot.docs
+        .map((messageDoc) => ({
+          id: messageDoc.id,
+          ...messageDoc.data(),
+        }))
+        .sort((a, b) => {
+          const aTime = a.createdAt?.toMillis?.() || 0;
+          const bTime = b.createdAt?.toMillis?.() || 0;
+          return aTime - bTime;
+        });
+
+      setTeamChatMessages(messages);
+      setTeamChatLoading(false);
+    },
+    (error) => {
+      console.error("TEAM CHAT LISTENER ERROR:", error);
+      setTeamChatError(
+        "Unable to load team messages. Make sure the latest Firestore rules are published."
+      );
+      setTeamChatLoading(false);
+    }
+  );
+
+  return () => unsubscribe();
+}, [teamChatOpen, teamChatTeam?.id, authUser]);
+
+useEffect(() => {
+  if (!teamChatOpen) return;
+  teamChatMessagesEndRef.current?.scrollIntoView({
+    behavior: "smooth",
+    block: "nearest",
+  });
+}, [teamChatMessages, teamChatOpen]);
+
+const sendTeamChatMessage = async () => {
+  if (!authUser || !teamChatTeam?.id || teamChatSending) return;
+
+  const message = teamChatInput.trim();
+
+  if (!message) return;
+
+  if (message.length > 2000) {
+    showActionToast("Messages can be up to 2000 characters.");
     return;
   }
 
-  const invitationId = `${team.id}_${student.id}`;
-  setTeamInviteLoading(true);
-  try {
-    const invitationRef = doc(db, "teamInvitations", invitationId);
-    const existingSnap = await getDoc(invitationRef);
-    if (existingSnap.exists() && ["pending", "accepted"].includes(existingSnap.data()?.status)) {
-      showActionToast("This student already has a team invitation.");
-      return;
-    }
+  setTeamChatSending(true);
 
-    await setDoc(invitationRef, {
-      teamId: team.id,
-      teamTitle: team.title || "Hackathon Team",
-      inviterId: authUser.uid,
-      inviterName: profileData.name || authUser.email || "CIT Student",
-      inviteeId: student.id,
-      inviteeName: student.name || "CIT Student",
+  try {
+    await addDoc(
+      collection(
+        db,
+        "teamChats",
+        teamChatTeam.id,
+        "messages"
+      ),
+      {
+        teamId: teamChatTeam.id,
+        senderId: authUser.uid,
+        senderName:
+          profileData.name ||
+          authUser.email ||
+          "CIT Student",
+        message,
+        createdAt: serverTimestamp(),
+      }
+    );
+
+    setTeamChatInput("");
+  } catch (error) {
+    console.error("TEAM CHAT SEND ERROR:", error);
+
+    if (error?.code === "permission-denied") {
+      showActionToast(
+        "You no longer have permission to send messages in this team."
+      );
+    } else {
+      showActionToast("Unable to send your message. Please try again.");
+    }
+  } finally {
+    setTeamChatSending(false);
+  }
+};
+
+const submitTeamChatReport = async () => {
+  const target = teamChatReportTarget;
+
+  if (
+    !authUser ||
+    !teamChatTeam?.id ||
+    !target?.id ||
+    !target.senderId ||
+    target.senderId === authUser.uid ||
+    !teamChatReportReason ||
+    teamChatReportSubmitting
+  ) {
+    return;
+  }
+
+  setTeamChatReportSubmitting(true);
+
+  try {
+    await addDoc(collection(db, "teamChatReports"), {
+      teamId: teamChatTeam.id,
+      messageId: target.id,
+      reportedUserId: target.senderId,
+      reporterId: authUser.uid,
+      reason: teamChatReportReason,
+      description: teamChatReportDescription.trim().slice(0, 1000),
       status: "pending",
       createdAt: serverTimestamp(),
     });
 
-    await addDoc(collection(db, "notifications"), {
-      recipientId: student.id,
-      actorId: authUser.uid,
-      actorName: profileData.name || authUser.email || "CIT Student",
-      type: "team_invitation",
-      title: "Team invitation",
-      message: `You were invited to join ${team.title || "a team"}.`,
-      relatedId: invitationId,
-      read: false,
+    // Notify the team owner. Notification failure must not make a
+    // successfully-created report appear to have failed.
+    if (teamChatTeam.createdBy && teamChatTeam.createdBy !== authUser.uid) {
+      try {
+        await addDoc(collection(db, "notifications"), {
+          recipientId: teamChatTeam.createdBy,
+          actorId: authUser.uid,
+          actorName:
+            profileData.name || authUser.email || "CIT Student",
+          type: "team_chat_report",
+          title: "Team chat report submitted",
+          message: `A message in ${teamChatTeam.title || "your team"} was reported for ${teamChatReportReason.replace(/_/g, " ")}.`,
+          relatedId: teamChatTeam.id,
+          read: false,
+          createdAt: serverTimestamp(),
+        });
+      } catch (notificationError) {
+        console.error(
+          "TEAM CHAT REPORT NOTIFICATION ERROR:",
+          notificationError
+        );
+      }
+    }
+
+    setTeamChatReportTarget(null);
+    setTeamChatReportReason("");
+    setTeamChatReportDescription("");
+    setTeamChatMessageMenu(null);
+    showActionToast("Report submitted. Thank you for helping keep the team chat safe.");
+  } catch (error) {
+    console.error("TEAM CHAT REPORT ERROR:", error);
+
+    if (error?.code === "permission-denied") {
+      showActionToast(
+        "Firebase denied the report. Make sure the latest Firestore rules are published."
+      );
+    } else {
+      showActionToast("Unable to submit the report. Please try again.");
+    }
+  } finally {
+    setTeamChatReportSubmitting(false);
+  }
+};
+
+const formatTeamChatTime = (timestamp) => {
+  if (!timestamp) return "Sending...";
+
+  let date = null;
+
+  if (typeof timestamp?.toDate === "function") {
+    date = timestamp.toDate();
+  } else if (timestamp instanceof Date) {
+    date = timestamp;
+  } else if (typeof timestamp === "number") {
+    date = new Date(timestamp);
+  }
+
+  if (!date || Number.isNaN(date.getTime())) return "Just now";
+
+  return date.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+};
+
+const inviteStudentToTeam = async (student, team) => {
+  if (!authUser || !student?.id || !team?.id) return;
+
+  // Student must be connected before they can be invited.
+  if (!getConnectionForStudent(student.id)) {
+    showActionToast(
+      "Connect with the student before inviting them to a team."
+    );
+    return;
+  }
+
+  const invitationId = `${team.id}_${student.id}`;
+  const invitationRef = doc(
+    db,
+    "teamInvitations",
+    invitationId
+  );
+
+  const teamRef = doc(
+    db,
+    "teams",
+    team.id
+  );
+
+  // Check local membership first.
+  const actualMember = selectedTeamMembers.some(
+    (member) => member.memberId === student.id
+  );
+
+  if (actualMember) {
+    showActionToast(
+      "This student is already a member of the team."
+    );
+    return;
+  }
+
+  setTeamInviteLoading(true);
+
+  try {
+    /*
+     * ============================================================
+     * STEP 1 — VERIFY THE TEAM
+     * ============================================================
+     */
+
+    let teamSnap;
+
+    try {
+      teamSnap = await withTimeout(
+        getDoc(teamRef),
+        10000,
+        "Team invitation team check"
+      );
+    } catch (error) {
+      console.error(
+        "TEAM INVITE STEP 1 — TEAM READ FAILED:",
+        error
+      );
+      throw error;
+    }
+
+    if (!teamSnap.exists()) {
+      throw new Error("TEAM_NOT_FOUND");
+    }
+
+    const latestTeam = teamSnap.data();
+
+    // Only the team owner can send invitations.
+    if (latestTeam.createdBy !== authUser.uid) {
+      throw new Error("NOT_TEAM_OWNER");
+    }
+
+    /*
+     * ============================================================
+     * STEP 2 — REMOVE STUDENT FROM BLOCKED LIST
+     * ============================================================
+     */
+
+    const blockedMemberIds = Array.isArray(
+      latestTeam.blockedMemberIds
+    )
+      ? latestTeam.blockedMemberIds
+      : [];
+
+    const nextBlockedMemberIds =
+      blockedMemberIds.filter(
+        (id) => id !== student.id
+      );
+
+    /*
+     * ============================================================
+     * STEP 3 — CREATE INVITATION DATA
+     * ============================================================
+     */
+
+    const invitationData = {
+      teamId: team.id,
+
+      teamTitle:
+        latestTeam.title ||
+        team.title ||
+        "Hackathon Team",
+
+      inviterId: authUser.uid,
+
+      inviterName:
+        profileData.name ||
+        authUser.email ||
+        "CIT Student",
+
+      inviteeId: student.id,
+
+      inviteeName:
+        student.name ||
+        "CIT Student",
+
+      status: "pending",
+
       createdAt: serverTimestamp(),
+    };
+
+    /*
+     * ============================================================
+     * STEP 4 — WRITE INVITATION + UPDATE BLOCKED LIST
+     *
+     * This works for:
+     *
+     * 1. No previous invitation  -> CREATE
+     * 2. Declined invitation     -> UPDATE to pending
+     * 3. Accepted invitation     -> UPDATE to pending
+     *
+     * The Firestore rules now allow declined/accepted -> pending.
+     * ============================================================
+     */
+
+    try {
+      const invitationBatch = writeBatch(db);
+
+      invitationBatch.set(
+        invitationRef,
+        invitationData
+      );
+
+      invitationBatch.update(
+        teamRef,
+        {
+          blockedMemberIds:
+            nextBlockedMemberIds,
+        }
+      );
+
+      await withTimeout(
+        invitationBatch.commit(),
+        10000,
+        "Team invitation creation/update"
+      );
+    } catch (error) {
+      console.error(
+        "TEAM INVITE STEP 4 — WRITE FAILED:",
+        error
+      );
+      throw error;
+    }
+
+    /*
+     * ============================================================
+     * STEP 5 — UPDATE LOCAL TEAM STATE
+     * ============================================================
+     */
+
+    const updatedTeam = {
+      ...team,
+      ...latestTeam,
+      id: team.id,
+      blockedMemberIds:
+        nextBlockedMemberIds,
+    };
+
+    setSelectedTeam(updatedTeam);
+
+    setAllTeams((prev) =>
+      prev.map((item) =>
+        item.id === team.id
+          ? updatedTeam
+          : item
+      )
+    );
+
+    setUserTeams((prev) =>
+      prev.map((item) =>
+        item.id === team.id
+          ? updatedTeam
+          : item
+      )
+    );
+
+    /*
+     * ============================================================
+     * STEP 6 — UPDATE LOCAL PENDING INVITATION LIST
+     * ============================================================
+     */
+
+    const newLocalInvitation = {
+      id: invitationId,
+      ...invitationData,
+    };
+
+    setSelectedTeamPendingInvites((prev) => {
+      const filtered = prev.filter(
+        (invite) =>
+          invite.id !== invitationId
+      );
+
+      return [
+        ...filtered,
+        newLocalInvitation,
+      ];
     });
 
-    setTeamInvitations((prev) => [
-      ...prev.filter((item) => item.id !== invitationId),
-      { id: invitationId, teamId: team.id, teamTitle: team.title, inviteeId: student.id, status: "pending" },
-    ]);
-    showActionToast(`Team invitation sent to ${student.name}.`);
+    /*
+     * ============================================================
+     * STEP 7 — SEND NOTIFICATION
+     *
+     * Notification is secondary.
+     * If it fails, the actual invitation remains successful.
+     * ============================================================
+     */
+
+    try {
+      await withTimeout(
+        addDoc(
+          collection(db, "notifications"),
+          {
+            recipientId: student.id,
+
+            actorId: authUser.uid,
+
+            actorName:
+              profileData.name ||
+              authUser.email ||
+              "CIT Student",
+
+            type: "team_invitation",
+
+            title: "Team invitation",
+
+            message: `You were invited to join ${
+              latestTeam.title ||
+              team.title ||
+              "a team"
+            }.`,
+
+            relatedId: invitationId,
+
+            read: false,
+
+            createdAt: serverTimestamp(),
+          }
+        ),
+        10000,
+        "Team invitation notification"
+      );
+    } catch (notificationError) {
+      console.error(
+        "TEAM INVITATION NOTIFICATION ERROR:",
+        notificationError
+      );
+    }
+
+    /*
+     * ============================================================
+     * SUCCESS
+     * ============================================================
+     */
+
+    showActionToast(
+      `${student.name || "Student"} was invited to the team.`
+    );
+
   } catch (error) {
-    console.error("TEAM INVITATION ERROR:", error);
-    showActionToast("Unable to send the team invitation.");
+    console.error(
+      "================================================"
+    );
+
+    console.error(
+      "TEAM INVITATION ERROR:"
+    );
+
+    console.error(error);
+
+    console.error(
+      "TEAM INVITATION ERROR CODE:",
+      error?.code
+    );
+
+    console.error(
+      "TEAM INVITATION ERROR MESSAGE:",
+      error?.message
+    );
+
+    console.error(
+      "================================================"
+    );
+
+    if (error?.message === "TEAM_NOT_FOUND") {
+      showActionToast(
+        "This team could not be found."
+      );
+    } else if (
+      error?.message === "NOT_TEAM_OWNER"
+    ) {
+      showActionToast(
+        "Only the team owner can send invitations."
+      );
+    } else {
+      showActionToast(
+        "Unable to send the team invitation. Please try again."
+      );
+    }
+
   } finally {
     setTeamInviteLoading(false);
   }
 };
 
+const openTeamInviteStudents = async (team) => {
+  if (!authUser || team?.createdBy !== authUser.uid) return;
+
+  // Open the modal immediately so Firebase loading can never freeze
+  // the Team Invite UI.
+  setSelectedTeam(team);
+  setSelectedTeamMembers([]);
+  setSelectedTeamPendingInvites([]);
+  setTeamInviteSearch("");
+  setTeamInviteOpen(true);
+
+  try {
+    /*
+     * Load ACTUAL team memberships.
+     * This intentionally does not use team.memberIds because stale IDs
+     * must not make a student appear as "Joined".
+     */
+    const membershipsSnapshot = await withTimeout(
+      getDocs(
+        query(
+          collection(db, "teamMemberships"),
+          where("teamId", "==", team.id)
+        )
+      ),
+      10000,
+      "Team membership load"
+    );
+
+    const membershipRows = membershipsSnapshot.docs.map(
+      (d) => ({
+        id: d.id,
+        ...d.data(),
+      })
+    );
+
+    const actualMemberIds = new Set(
+      [
+        team.createdBy,
+        ...membershipRows
+          .map((membership) => membership.memberId)
+          .filter(Boolean),
+      ].filter(Boolean)
+    );
+
+    const memberRows = await Promise.all(
+      Array.from(actualMemberIds).map(async (memberId) => {
+        if (memberId === team.createdBy) {
+          return {
+            id: `owner_${team.id}`,
+            memberId,
+            memberName:
+              profileData.name ||
+              team.createdByName ||
+              authUser.email ||
+              "Team Owner",
+            role: "owner",
+          };
+        }
+
+        const membership = membershipRows.find(
+          (item) => item.memberId === memberId
+        );
+
+        try {
+          const memberSnap = await withTimeout(
+            getDoc(doc(db, "users", memberId)),
+            10000,
+            "Member profile load"
+          );
+
+          const data = memberSnap.exists()
+            ? memberSnap.data()
+            : {};
+
+          const fallback = teammates.find(
+            (person) => person.id === memberId
+          );
+
+          return {
+            id: `member_${memberId}`,
+            memberId,
+            memberName:
+              data.name ||
+              data.email?.split("@")[0] ||
+              membership?.memberName ||
+              fallback?.name ||
+              "CIT Student",
+            role: membership?.role || "member",
+          };
+        } catch (memberError) {
+          console.error(
+            "TEAM INVITE MEMBER LOAD ERROR:",
+            memberError
+          );
+
+          const fallback = teammates.find(
+            (person) => person.id === memberId
+          );
+
+          return {
+            id: `member_${memberId}`,
+            memberId,
+            memberName:
+              membership?.memberName ||
+              fallback?.name ||
+              "CIT Student",
+            role: membership?.role || "member",
+          };
+        }
+      })
+    );
+
+    setSelectedTeamMembers(memberRows);
+
+    // Only pending invitations are considered pending.
+    // An accepted invitation without an actual membership document
+    // must NOT make the student appear as Joined.
+    const sentInvitationsSnapshot = await withTimeout(
+      getDocs(
+        query(
+          collection(db, "teamInvitations"),
+          where("inviterId", "==", authUser.uid)
+        )
+      ),
+      10000,
+      "Team invitation status load"
+    );
+
+    const pendingInvites = sentInvitationsSnapshot.docs
+      .map((d) => ({
+        id: d.id,
+        ...d.data(),
+      }))
+      .filter(
+        (invite) =>
+          invite.teamId === team.id &&
+          invite.status === "pending"
+      );
+
+    setSelectedTeamPendingInvites(pendingInvites);
+  } catch (error) {
+    console.error(
+      "TEAM INVITE STATUS LOAD ERROR:",
+      error
+    );
+
+    // The modal stays usable even if the background Firebase read fails.
+    setSelectedTeamMembers([]);
+    setSelectedTeamPendingInvites([]);
+    showActionToast(
+      "Unable to refresh team membership status."
+    );
+  }
+};
+
+const closeTeamInviteStudents = () => {
+  setTeamInviteOpen(false);
+  setTeamInviteSearch("");
+  setTeamInviteLoading(false);
+};
+
 const respondToTeamInvitation = async (invitation, decision) => {
   if (!authUser || invitation.inviteeId !== authUser.uid) return;
-  setTeamInviteLoading(true);
-  try {
-    await updateDoc(doc(db, "teamInvitations", invitation.id), {
-      status: decision,
-      respondedAt: serverTimestamp(),
-    });
 
+  setTeamInviteLoading(true);
+
+  try {
     if (decision === "accepted") {
       const teamRef = doc(db, "teams", invitation.teamId);
-      const membershipRef = doc(db, "teamMemberships", `${invitation.teamId}_${authUser.uid}`);
+      const membershipRef = doc(
+        db,
+        "teamMemberships",
+        `${invitation.teamId}_${authUser.uid}`
+      );
+
+      const existingMembershipSnap = await withTimeout(
+        getDoc(membershipRef),
+        10000,
+        "Existing team membership check"
+      );
+
+      if (existingMembershipSnap.exists()) {
+        throw new Error("ALREADY_MEMBER");
+      }
 
       await runTransaction(db, async (transaction) => {
         const teamSnap = await transaction.get(teamRef);
+
         if (!teamSnap.exists()) {
           throw new Error("TEAM_NOT_FOUND");
         }
 
         const teamData = teamSnap.data();
-        const currentMemberIds = Array.isArray(teamData.memberIds)
-          ? teamData.memberIds
-          : [teamData.createdBy].filter(Boolean);
-        const maxMembers = Number(teamData.members) || 1;
 
-        if (currentMemberIds.includes(authUser.uid)) {
-          return;
-        }
+        // Remove only this user's stale ID, if an old team document
+        // still contains it. Actual membership is represented by
+        // teamMemberships/{teamId_userId}.
+        const currentMemberIds = Array.isArray(teamData.memberIds)
+          ? teamData.memberIds.filter(
+              (id) => id !== authUser.uid
+            )
+          : [teamData.createdBy].filter(
+              (id) => id !== authUser.uid
+            );
+
+        const maxMembers = Number(teamData.members) || 1;
 
         if (currentMemberIds.length >= maxMembers) {
           throw new Error("TEAM_FULL");
         }
 
-        const nextCount = currentMemberIds.length + 1;
+        const nextMemberIds = Array.from(
+          new Set([
+            ...currentMemberIds,
+            authUser.uid,
+          ].filter(Boolean))
+        );
+
+        const nextCount = nextMemberIds.length;
+
         transaction.update(teamRef, {
-          memberIds: arrayUnion(authUser.uid),
+          memberIds: nextMemberIds,
           status: nextCount >= maxMembers ? "Full" : "Open",
         });
+
         transaction.set(membershipRef, {
           teamId: invitation.teamId,
           teamTitle: invitation.teamTitle || "Hackathon Team",
           memberId: authUser.uid,
-          memberName: profileData.name || authUser.email || "CIT Student",
+          memberName:
+            profileData.name || authUser.email || "CIT Student",
           role: "member",
           joinedAt: serverTimestamp(),
         });
       });
 
-      const joinedTeam = allTeams.find((team) => team.id === invitation.teamId);
+      // Only mark the invitation as accepted AFTER
+      // the team membership transaction succeeds.
+      await updateDoc(doc(db, "teamInvitations", invitation.id), {
+        status: "accepted",
+        respondedAt: serverTimestamp(),
+      });
+
+      const joinedTeam = allTeams.find(
+        (team) => team.id === invitation.teamId
+      );
+
       if (joinedTeam) {
         setUserTeams((prev) => [
           ...prev.filter((team) => team.id !== joinedTeam.id),
           {
             ...joinedTeam,
-            memberIds: Array.from(new Set([
-              ...(joinedTeam.memberIds || [joinedTeam.createdBy].filter(Boolean)),
-              authUser.uid,
-            ])),
+            memberIds: Array.from(
+              new Set([
+                ...(joinedTeam.memberIds ||
+                  [joinedTeam.createdBy].filter(Boolean)),
+                authUser.uid,
+              ])
+            ),
           },
         ]);
       }
 
-      await addDoc(collection(db, "notifications"), {
-        recipientId: invitation.inviterId,
-        actorId: authUser.uid,
-        actorName: profileData.name || authUser.email || "CIT Student",
-        type: "team_invitation_accepted",
-        title: "Team invitation accepted",
-        message: `${profileData.name || "A student"} joined ${invitation.teamTitle || "your team"}.`,
-        relatedId: invitation.teamId,
-        read: false,
-        createdAt: serverTimestamp(),
-      });
-      showActionToast(`You joined ${invitation.teamTitle || "the team"}.`);
+      try {
+        await addDoc(collection(db, "notifications"), {
+          recipientId: invitation.inviterId,
+          actorId: authUser.uid,
+          actorName:
+            profileData.name || authUser.email || "CIT Student",
+          type: "team_invitation_accepted",
+          title: "Team invitation accepted",
+          message: `${profileData.name || "A student"} joined ${
+            invitation.teamTitle || "your team"
+          }.`,
+          relatedId: invitation.teamId,
+          read: false,
+          createdAt: serverTimestamp(),
+        });
+      } catch (notificationError) {
+        console.error(
+          "TEAM INVITATION ACCEPTED NOTIFICATION ERROR:",
+          notificationError
+        );
+      }
+
+      setTeamInvitations((prev) =>
+        prev.map((item) =>
+          item.id === invitation.id
+            ? { ...item, status: "accepted" }
+            : item
+        )
+      );
+
+      showActionToast(
+        `You joined ${invitation.teamTitle || "the team"}.`
+      );
     } else {
-      await addDoc(collection(db, "notifications"), {
-        recipientId: invitation.inviterId,
-        actorId: authUser.uid,
-        actorName: profileData.name || authUser.email || "CIT Student",
-        type: "team_invitation_declined",
-        title: "Team invitation declined",
-        message: `${profileData.name || "A student"} declined your team invitation.`,
-        relatedId: invitation.teamId,
-        read: false,
-        createdAt: serverTimestamp(),
+      // Decline the invitation.
+      await updateDoc(doc(db, "teamInvitations", invitation.id), {
+        status: "declined",
+        respondedAt: serverTimestamp(),
       });
+
+      try {
+        await addDoc(collection(db, "notifications"), {
+          recipientId: invitation.inviterId,
+          actorId: authUser.uid,
+          actorName:
+            profileData.name || authUser.email || "CIT Student",
+          type: "team_invitation_declined",
+          title: "Team invitation declined",
+          message: `${profileData.name || "A student"} declined your team invitation.`,
+          relatedId: invitation.teamId,
+          read: false,
+          createdAt: serverTimestamp(),
+        });
+      } catch (notificationError) {
+        console.error(
+          "TEAM INVITATION DECLINED NOTIFICATION ERROR:",
+          notificationError
+        );
+      }
+
+      setTeamInvitations((prev) =>
+        prev.map((item) =>
+          item.id === invitation.id
+            ? { ...item, status: "declined" }
+            : item
+        )
+      );
+
       showActionToast("Team invitation declined.");
     }
-
-    setTeamInvitations((prev) => prev.map((item) =>
-      item.id === invitation.id ? { ...item, status: decision } : item
-    ));
   } catch (error) {
     console.error("TEAM INVITATION RESPONSE ERROR:", error);
-    showActionToast("Unable to update the team invitation.");
+
+    if (error?.message === "TEAM_NOT_FOUND") {
+      showActionToast("This team could not be found.");
+    } else if (error?.message === "TEAM_FULL") {
+      showActionToast("This team is already full.");
+    } else if (error?.message === "ALREADY_MEMBER") {
+      showActionToast("You are already a member of this team.");
+    } else {
+      showActionToast("Unable to update the team invitation.");
+    }
   } finally {
     setTeamInviteLoading(false);
   }
@@ -1726,6 +3730,28 @@ const teammateSearchActive = Boolean(
 
 const teammateDepartments = DEPARTMENT_OPTIONS;
 const teammateYears = ["1st Year", "2nd Year", "3rd Year", "4th Year"];
+
+const normalizedTeamInviteSearch = teamInviteSearch.toLowerCase().trim();
+const teamInviteStudents = teammates.filter((student) => {
+  const name = (student.name || "").toLowerCase();
+  const campusId = normalizeCampusConnectId(student.campusConnectId);
+  const department = normalizeDepartment(student.department || student.role || "").toLowerCase();
+  const year = (student.year || "").toLowerCase();
+  const skills = Array.isArray(student.skills)
+    ? student.skills.map((skill) => skill.toLowerCase().trim()).filter(Boolean)
+    : [];
+
+  if (!normalizedTeamInviteSearch) return true;
+
+  const normalizedSearchId = normalizeCampusConnectId(normalizedTeamInviteSearch);
+  return (
+    name.includes(normalizedTeamInviteSearch) ||
+    (normalizedSearchId && campusId.startsWith(normalizedSearchId)) ||
+    department.includes(normalizedTeamInviteSearch) ||
+    year.includes(normalizedTeamInviteSearch) ||
+    skills.some((skill) => skill.includes(normalizedTeamInviteSearch))
+  );
+});
 
 const normalizeTeamConnectId = (value) =>
   (value || "")
@@ -2486,6 +4512,10 @@ try {
   );
 }
 
+const profileViewData = viewedProfile || profileData;
+const profileViewActivity = viewedProfile?.activityData || activityData;
+const viewingOwnProfile = !viewedProfile || viewedProfile.id === authUser?.uid;
+
 return (
   <div className={`app-shell ${lightMode ? "light-mode" : ""}`}>
 
@@ -2598,8 +4628,10 @@ return (
         : "nav-item"
     }
     onClick={() => {
+  setViewedProfile(null);
   setActiveNav("profile");
   setProfilePageOpen(true);
+  scrollToPageTop();
 }}
   >
     <User size={18} />
@@ -2642,12 +4674,27 @@ return (
           STUDENT PROFILE
         </span>
 
-        <h1>Your Profile</h1>
+        <h1>{viewingOwnProfile ? "Your Profile" : `${profileViewData.name || "Student"}'s Profile`}</h1>
 
         <p>
-          Manage your CampusConnect identity, skills,
-          and campus activity.
+          {viewingOwnProfile
+            ? "Manage your CampusConnect identity, skills, and campus activity."
+            : "View this student's CampusConnect profile and campus activity."}
         </p>
+
+        {viewingOwnProfile && (
+          <button
+            type="button"
+            className="profile-network-trigger profile-network-header-trigger"
+            onClick={() => {
+              setProfileNetworkOpen(true);
+              setProfileNetworkTab("requests");
+            }}
+          >
+            <Users size={15} />
+            <span>Connections</span>
+          </button>
+        )}
       </div>
 
       <button
@@ -2655,7 +4702,9 @@ return (
         className="profile-back-button"
         onClick={() => {
           setProfilePageOpen(false);
+          setViewedProfile(null);
           setActiveNav("home");
+          scrollToPageTop();
         }}
       >
         Back to Home
@@ -2668,17 +4717,17 @@ return (
       <div className="profile-summary-card">
 
 <div className="profile-avatar-large">
-  {profileData.name.charAt(0).toUpperCase()}
+  {(profileViewData.name || "S").charAt(0).toUpperCase()}
 </div>
 
         <span className="profile-status">
           ACTIVE STUDENT
         </span>
 
-       <h2>{profileData.name}</h2>
+       <h2>{profileViewData.name}</h2>
 
         <p className="profile-role">
-          Student • CampusConnect
+          {profileViewData.department || "Department not added"} • CampusConnect
         </p>
 
         <div
@@ -2692,19 +4741,21 @@ return (
           }}
         >
           <span style={{ opacity: 0.62, marginRight: "6px" }}>CampusConnect ID</span>
-          <strong>{profileData.campusConnectId || "Generating..."}</strong>
+          <strong>{profileViewData.campusConnectId || "Generating..."}</strong>
         </div>
 
 <p className="profile-about">
-  {profileData.bio}
+  {profileViewData.bio || "No bio added yet."}
 </p>
-<button
-  type="button"
-  className="profile-edit-button"
-  onClick={() => setEditProfileOpen(true)}
->
-  Edit Profile
-</button>
+{viewingOwnProfile && (
+  <button
+    type="button"
+    className="profile-edit-button"
+    onClick={() => setEditProfileOpen(true)}
+  >
+    Edit Profile
+  </button>
+)}
 
       </div>
 
@@ -2723,17 +4774,17 @@ return (
 
           <div className="profile-info-item">
             <span>COLLEGE</span>
-            <strong>{profileData.college}</strong>
+            <strong>{profileViewData.college}</strong>
           </div>
 
           <div className="profile-info-item">
             <span>DEPARTMENT</span>
-            <strong>{profileData.department}</strong>
+            <strong>{profileViewData.department || "Not added"}</strong>
           </div>
 
           <div className="profile-info-item">
             <span>YEAR</span>
-            <strong>{profileData.year}</strong>
+            <strong>{profileViewData.year}</strong>
           </div>
 
           <div className="profile-info-item">
@@ -2765,7 +4816,7 @@ return (
             <Trophy size={18} />
           </div>
 
-          <strong>{activityData.hackathonsJoined}</strong>
+          <strong>{profileViewActivity.hackathonsJoined}</strong>
           <span>Hackathons Joined</span>
         </div>
 
@@ -2774,7 +4825,7 @@ return (
             <Users size={18} />
           </div>
 
-<strong>{activityData.teamsCreated}</strong>
+<strong>{profileViewActivity.teamsCreated}</strong>
           <span>Teams Created</span>
         </div>
 
@@ -2783,7 +4834,7 @@ return (
             <BookOpen size={18} />
           </div>
 
-<strong>{activityData.resourcesShared}</strong>
+<strong>{profileViewActivity.resourcesShared}</strong>
           <span>Resources Shared</span>
         </div>
 
@@ -2792,7 +4843,7 @@ return (
             <CalendarDays size={18} />
           </div>
 
-         <strong>{activityData.eventsAttended}</strong>
+         <strong>{profileViewActivity.eventsAttended}</strong>
           <span>Events Attended</span>
         </div>
 
@@ -2814,9 +4865,11 @@ return (
       </div>
 
 <div className="profile-skills-list">
-  {profileData.skills
-    .split(",")
-    .map((skill) => skill.trim())
+  {(Array.isArray(profileViewData.skills)
+    ? profileViewData.skills
+    : (profileViewData.skills || "").split(",")
+  )
+    .map((skill) => skill?.toString().trim())
     .filter(Boolean)
     .map((skill) => (
       <span key={skill}>{skill}</span>
@@ -2825,39 +4878,362 @@ return (
 
     </div>
 
-    <div className="profile-connections-card">
-      <div className="profile-card-title">
-        <span className="eyebrow">NETWORK</span>
-        <h3>Your Connections</h3>
+    <div className="profile-media-card">
+      <div className="profile-card-title profile-media-card-title">
+        <div>
+          <span className="eyebrow">ACHIEVEMENTS & MEDIA</span>
+          <h3>Achievements & Media</h3>
+          <p>Certificates, hackathon photos, project screenshots, awards, internships, and other proof of your work.</p>
+        </div>
+
+        {viewingOwnProfile && (
+          <label
+            className={`profile-media-upload-button ${profileMediaUploading ? "disabled" : ""}`}
+          >
+            <Upload size={15} />
+            <span>{profileMediaUploading ? "Uploading..." : "Add Media"}</span>
+            <input
+              type="file"
+              accept="image/*,application/pdf"
+              multiple
+              disabled={profileMediaUploading}
+              onChange={(event) => {
+                uploadProfileMedia(event.target.files);
+                event.target.value = "";
+              }}
+            />
+          </label>
+        )}
       </div>
 
-      {connections.length === 0 ? (
-        <div className="profile-empty-state">
-          <Users size={18} />
-          <span>Your accepted student connections will appear here.</span>
+      {profileMediaError && (
+        <div className="profile-media-error">
+          {profileMediaError}
+        </div>
+      )}
+
+      {profileMediaLoading ? (
+        <div className="profile-media-empty">
+          <FileImage size={22} />
+          <span>Loading achievements and media...</span>
+        </div>
+      ) : profileMedia.length === 0 ? (
+        <div className="profile-media-empty">
+          <FileImage size={24} />
+          <strong>No achievements or media yet.</strong>
+          <span>{viewingOwnProfile ? "Upload certificates, project screenshots, awards, or hackathon photos to showcase your work." : "This student has not added any achievement media yet."}</span>
         </div>
       ) : (
-        <div className="profile-connections-list">
-          {connections.map((connection) => {
-            const otherId = connection.userIds?.find((id) => id !== authUser.uid);
-            const person = teammates.find((item) => item.id === otherId);
+        <div className="profile-media-grid">
+          {profileMedia.slice(0, 6).map((media, index) => {
+            const isPdf = media.type === "pdf" || media.mimeType === "application/pdf";
+            const showMoreOverlay = index === 5 && profileMedia.length > 6;
+
             return (
-              <div className="profile-connection-item" key={connection.id}>
-                <div className="profile-connection-avatar">
-                  {(person?.name || "S").charAt(0).toUpperCase()}
-                </div>
-                <div>
-                  <strong>{person?.name || "Connected Student"}</strong>
-                  <span>{person?.campusConnectId || "CampusConnect ID unavailable"}</span>
-                </div>
-                <UserCheck size={16} />
-              </div>
+              <button
+                type="button"
+                className="profile-media-tile"
+                key={media.id}
+                onClick={() => {
+                  if (showMoreOverlay) {
+                    setMediaGalleryOpen(true);
+                    return;
+                  }
+                  setSelectedMedia(media);
+                }}
+                aria-label={showMoreOverlay ? "See all achievements and media" : `Open ${media.title || media.fileName || "media"}`}
+              >
+                {isPdf ? (
+                  <div className="profile-media-pdf-preview">
+                    <FileImage size={30} />
+                    <span>PDF</span>
+                  </div>
+                ) : (
+                  <img
+                    src={media.thumbnailUrl || media.url}
+                    alt={media.title || media.fileName || "Achievement media"}
+                    loading="lazy"
+                  />
+                )}
+
+                {showMoreOverlay && (
+                  <span className="profile-media-more-overlay">
+                    See more +{profileMedia.length - 6}
+                  </span>
+                )}
+              </button>
             );
           })}
         </div>
       )}
     </div>
 
+{viewingOwnProfile && (
+  <>
+    {profileNetworkOpen && (
+      <div
+        className="profile-network-overlay"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            setProfileNetworkOpen(false);
+          }
+        }}
+      >
+        <div
+          className="profile-network-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Connections and requests"
+        >
+          <div className="profile-network-modal-header">
+            <div>
+              <span className="eyebrow">NETWORK</span>
+              <h3>Connections</h3>
+            </div>
+
+            <button
+              type="button"
+              className="profile-network-close"
+              onClick={() => setProfileNetworkOpen(false)}
+              aria-label="Close connections"
+            >
+              <X size={17} />
+            </button>
+          </div>
+
+          <div className="profile-network-tabs">
+            <button
+              type="button"
+              className={
+                profileNetworkTab === "requests" ? "active" : ""
+              }
+              onClick={() => setProfileNetworkTab("requests")}
+            >
+              Requests
+              {connectionRequests.filter(
+                (item) =>
+                  (item.receiverId === authUser.uid ||
+                    item.senderId === authUser.uid) &&
+                  item.status === "pending"
+              ).length > 0 && (
+                <span>
+                  {
+                    connectionRequests.filter(
+                      (item) =>
+                        (item.receiverId === authUser.uid ||
+                          item.senderId === authUser.uid) &&
+                        item.status === "pending"
+                    ).length
+                  }
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              className={
+                profileNetworkTab === "connections" ? "active" : ""
+              }
+              onClick={() => setProfileNetworkTab("connections")}
+            >
+              Connections
+              {connections.length > 0 && (
+                <span>{connections.length}</span>
+              )}
+            </button>
+          </div>
+
+          <div className="profile-network-modal-body">
+            {profileNetworkTab === "requests" ? (
+              <>
+                {connectionRequests.filter(
+                  (item) =>
+                    item.receiverId === authUser.uid &&
+                    item.status === "pending"
+                ).length === 0 &&
+                connectionRequests.filter(
+                  (item) =>
+                    item.senderId === authUser.uid &&
+                    item.status === "pending"
+                ).length === 0 ? (
+                  <div className="profile-network-empty">
+                    <Users size={20} />
+                    <span>No pending connection requests.</span>
+                  </div>
+                ) : (
+                  <>
+                    {connectionRequests
+                      .filter(
+                        (item) =>
+                          item.receiverId === authUser.uid &&
+                          item.status === "pending"
+                      )
+                      .map((request) => (
+                        <div
+                          className="profile-network-request"
+                          key={`incoming-${request.id}`}
+                        >
+                          <div className="profile-network-avatar">
+                            {(request.senderName || "S")
+                              .charAt(0)
+                              .toUpperCase()}
+                          </div>
+
+                          <div className="profile-network-person">
+                            <strong>
+                              {request.senderName || "Student"}
+                            </strong>
+                            <span>Wants to connect with you</span>
+                          </div>
+
+                          <div className="profile-network-actions">
+                            <button
+                              type="button"
+                              className="profile-network-accept"
+                              disabled={connectionActionLoading}
+                              onClick={() =>
+                                respondToConnectionRequest(
+                                  request,
+                                  "accepted"
+                                )
+                              }
+                            >
+                              <UserCheck size={14} />
+                              Accept
+                            </button>
+
+                            <button
+                              type="button"
+                              className="profile-network-decline"
+                              disabled={connectionActionLoading}
+                              onClick={() =>
+                                respondToConnectionRequest(
+                                  request,
+                                  "declined"
+                                )
+                              }
+                            >
+                              <UserX size={14} />
+                              Decline
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+
+                    {connectionRequests
+                      .filter(
+                        (item) =>
+                          item.senderId === authUser.uid &&
+                          item.status === "pending"
+                      )
+                      .map((request) => (
+                        <div
+                          className="profile-network-request"
+                          key={`outgoing-${request.id}`}
+                        >
+                          <div className="profile-network-avatar">
+                            {(request.receiverName || "S")
+                              .charAt(0)
+                              .toUpperCase()}
+                          </div>
+
+                          <div className="profile-network-person">
+                            <strong>
+                              {request.receiverName || "Student"}
+                            </strong>
+                            <span>Request pending</span>
+                          </div>
+
+                          <button
+                            type="button"
+                            className="profile-network-cancel"
+                            disabled={connectionActionLoading}
+                            onClick={() =>
+                              setConnectionRequestCancelTarget(request)
+                            }
+                          >
+                            <X size={14} />
+                            Cancel
+                          </button>
+                        </div>
+                      ))}
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                {connections.length === 0 ? (
+                  <div className="profile-network-empty">
+                    <Users size={20} />
+                    <span>Your accepted connections will appear here.</span>
+                  </div>
+                ) : (
+                  <div className="profile-network-connection-list">
+                    {connections.map((connection) => {
+                      const otherId = connection.userIds?.find(
+                        (id) => id !== authUser.uid
+                      );
+                      const person = teammates.find(
+                        (item) => item.id === otherId
+                      );
+
+                      return (
+                        <div
+                          className="profile-network-connection"
+                          key={connection.id}
+                        >
+                          <div className="profile-network-avatar">
+                            {(person?.name || "S")
+                              .charAt(0)
+                              .toUpperCase()}
+                          </div>
+
+                          <div className="profile-network-person">
+                            <strong>
+                              {person?.name || "Connected Student"}
+                            </strong>
+                            <span>
+                              {person?.campusConnectId ||
+                                "CampusConnect ID unavailable"}
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            className="profile-network-view-profile"
+                            onClick={() =>
+                              openTeamMemberProfile({
+                                memberId: otherId,
+                                memberName: person?.name,
+                              })
+                            }
+                          >
+                            <User size={14} />
+                            View Profile
+                          </button>
+
+                          <button
+                            type="button"
+                            className="profile-network-remove"
+                            disabled={connectionActionLoading}
+                            onClick={() => removeConnection(connection)}
+                          >
+                            <UserX size={14} />
+                            Remove
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+  </>
+)}
   </div>
 )}
 
@@ -2886,11 +5262,11 @@ return (
         className={`icon-button notification ${
             notificationOpen ? "active-icon" : ""
         }`}
-        onClick={() => setNotificationOpen((prev) => !prev)}
+        onClick={openNotifications}
         title="Notifications"
     >
         <Bell size={18} />
-        <span />
+        {notifications.some((item) => !item.read) && <span />}
     </button>
 
     {notificationOpen && (
@@ -2900,69 +5276,275 @@ return (
               <strong>Notifications</strong>
               <span>{notifications.filter((item) => !item.read).length} new</span>
             </div>
-            <button
-              className="notification-close"
-              onClick={() => setNotificationOpen(false)}
-              title="Close notifications"
-            >
-              <X size={16} />
-            </button>
+            <div className="notification-header-actions">
+              {notifications.length > 0 && (
+                <button
+                  type="button"
+                  className="notification-clear-button"
+                  onClick={clearNotifications}
+                  disabled={notificationClearLoading}
+                  title="Clear all notifications"
+                >
+                  {notificationClearLoading ? "Clearing..." : "Clear all"}
+                </button>
+              )}
+              <button
+                className="notification-close"
+                onClick={() => setNotificationOpen(false)}
+                title="Close notifications"
+              >
+                <X size={16} />
+              </button>
+            </div>
           </div>
 
           <div className="notification-list">
-            {notifications.length === 0 ? (
+            {notifications.length === 0 &&
+            !connectionRequests.some(
+              (item) =>
+                item.receiverId === authUser.uid &&
+                item.status === "pending"
+            ) &&
+            !teamInvitations.some(
+              (item) =>
+                item.inviteeId === authUser.uid &&
+                item.status === "pending"
+            ) ? (
               <div className="notification-empty">No notifications yet.</div>
             ) : (
-              notifications.slice(0, 8).map((notification) => (
-                <div
-                  className={`notification-item ${notification.read ? "read" : ""}`}
-                  key={notification.id}
-                  onClick={() => markNotificationRead(notification)}
-                >
-                  <div className="notification-dot" />
-                  <div>
-                    <strong>{notification.title || "CampusConnect notification"}</strong>
-                    <p>{notification.message || "You have a new CampusConnect update."}</p>
-                    <small>{notification.read ? "Read" : "New"}</small>
+              notifications.slice(0, 8).map((notification) => {
+                const pendingConnectionRequest =
+                  notification.type === "connection_request"
+                    ? connectionRequests.find(
+                        (item) =>
+                          item.id === notification.relatedId &&
+                          item.receiverId === authUser.uid &&
+                          item.status === "pending"
+                      )
+                    : null;
+
+                const pendingTeamInvitation =
+                  notification.type === "team_invitation"
+                    ? teamInvitations.find(
+                        (item) =>
+                          item.id === notification.relatedId &&
+                          item.inviteeId === authUser.uid &&
+                          item.status === "pending"
+                      )
+                    : null;
+
+                return (
+                  <div
+                    className={`notification-item ${
+                      notification.read ? "read" : ""
+                    } ${
+                      pendingConnectionRequest || pendingTeamInvitation
+                        ? "notification-item-actionable"
+                        : ""
+                    }`}
+                    key={notification.id}
+                    onClick={() => markNotificationRead(notification)}
+                  >
+                    <div className="notification-dot" />
+
+                    <div className="notification-content">
+                      <strong>
+                        {notification.title || "CampusConnect notification"}
+                      </strong>
+
+                      <p>
+                        {notification.message ||
+                          "You have a new CampusConnect update."}
+                      </p>
+
+                      <small>
+                        {formatNotificationTime(notification.createdAt)}
+                      </small>
+
+                      {pendingConnectionRequest && (
+                        <div
+                          className="notification-inline-actions"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              respondToConnectionRequest(
+                                pendingConnectionRequest,
+                                "accepted"
+                              )
+                            }
+                            disabled={connectionActionLoading}
+                          >
+                            <UserCheck size={14} />
+                            Accept
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              respondToConnectionRequest(
+                                pendingConnectionRequest,
+                                "declined"
+                              )
+                            }
+                            disabled={connectionActionLoading}
+                          >
+                            <UserX size={14} />
+                            Decline
+                          </button>
+                        </div>
+                      )}
+
+                      {pendingTeamInvitation && (
+                        <div
+                          className="notification-inline-actions"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              respondToTeamInvitation(
+                                pendingTeamInvitation,
+                                "accepted"
+                              )
+                            }
+                            disabled={teamInviteLoading}
+                          >
+                            <UserCheck size={14} />
+                            Join
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              respondToTeamInvitation(
+                                pendingTeamInvitation,
+                                "declined"
+                              )
+                            }
+                            disabled={teamInviteLoading}
+                          >
+                            <UserX size={14} />
+                            Decline
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
+
+            {/* Keep any pending request/invitation visible even if it is older
+                than the eight most recent ordinary notifications. */}
+            {notifications.length > 8 &&
+              connectionRequests
+                .filter(
+                  (item) =>
+                    item.receiverId === authUser.uid &&
+                    item.status === "pending" &&
+                    !notifications
+                      .slice(0, 8)
+                      .some((notification) => notification.relatedId === item.id)
+                )
+                .map((request) => (
+                  <div
+                    className="notification-item notification-item-actionable"
+                    key={`pending-request-${request.id}`}
+                  >
+                    <div className="notification-dot" />
+                    <div className="notification-content">
+                      <strong>New connection request</strong>
+                      <p>
+                        {request.senderName || "A student"} wants to connect
+                        with you.
+                      </p>
+                      <small>Pending</small>
+
+                      <div
+                        className="notification-inline-actions"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            respondToConnectionRequest(request, "accepted")
+                          }
+                          disabled={connectionActionLoading}
+                        >
+                          <UserCheck size={14} />
+                          Accept
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            respondToConnectionRequest(request, "declined")
+                          }
+                          disabled={connectionActionLoading}
+                        >
+                          <UserX size={14} />
+                          Decline
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+            {notifications.length > 8 &&
+              teamInvitations
+                .filter(
+                  (item) =>
+                    item.inviteeId === authUser.uid &&
+                    item.status === "pending" &&
+                    !notifications
+                      .slice(0, 8)
+                      .some((notification) => notification.relatedId === item.id)
+                )
+                .map((invitation) => (
+                  <div
+                    className="notification-item notification-item-actionable"
+                    key={`pending-invite-${invitation.id}`}
+                  >
+                    <div className="notification-dot" />
+                    <div className="notification-content">
+                      <strong>
+                        {invitation.teamTitle || "Hackathon Team"}
+                      </strong>
+                      <p>You've been invited to join this team.</p>
+                      <small>Pending</small>
+
+                      <div
+                        className="notification-inline-actions"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            respondToTeamInvitation(invitation, "accepted")
+                          }
+                          disabled={teamInviteLoading}
+                        >
+                          <UserCheck size={14} />
+                          Join
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            respondToTeamInvitation(invitation, "declined")
+                          }
+                          disabled={teamInviteLoading}
+                        >
+                          <UserX size={14} />
+                          Decline
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
           </div>
-
-          {connectionRequests.filter((item) => item.receiverId === authUser.uid && item.status === "pending").map((request) => (
-            <div className="notification-request" key={`request-${request.id}`}>
-              <div>
-                <strong>{request.senderName || "Student"}</strong>
-                <span>wants to connect with you.</span>
-              </div>
-              <div className="notification-request-actions">
-                <button type="button" onClick={() => respondToConnectionRequest(request, "accepted")} disabled={connectionActionLoading}>
-                  <UserCheck size={14} /> Accept
-                </button>
-                <button type="button" onClick={() => respondToConnectionRequest(request, "declined")} disabled={connectionActionLoading}>
-                  <UserX size={14} /> Decline
-                </button>
-              </div>
-            </div>
-          ))}
-
-          {teamInvitations.filter((item) => item.inviteeId === authUser.uid && item.status === "pending").map((invitation) => (
-            <div className="notification-request" key={`invite-${invitation.id}`}>
-              <div>
-                <strong>{invitation.teamTitle || "Hackathon Team"}</strong>
-                <span>You've been invited to join this team.</span>
-              </div>
-              <div className="notification-request-actions">
-                <button type="button" onClick={() => respondToTeamInvitation(invitation, "accepted")} disabled={teamInviteLoading}>
-                  <UserCheck size={14} /> Join
-                </button>
-                <button type="button" onClick={() => respondToTeamInvitation(invitation, "declined")} disabled={teamInviteLoading}>
-                  <UserX size={14} /> Decline
-                </button>
-              </div>
-            </div>
-          ))}
 
           <div className="notification-footer">
             {notifications.length > 8 ? `Showing latest 8 of ${notifications.length}` : "CampusConnect activity"}
@@ -3000,8 +5582,10 @@ return (
       type="button"
       onClick={() => {
         setUserMenuOpen(false);
+        setViewedProfile(null);
         setActiveNav("profile");
         setProfilePageOpen(true);
+        scrollToPageTop();
       }}
     >
       <User size={16} />
@@ -3635,15 +6219,29 @@ return (
                           <small>{team.teamConnectId || "Team ID unavailable"}</small>
                         </div>
                         {team.createdBy === authUser.uid ? (
-                          <button type="button" className="secondary-button" onClick={() => openTeamStatus(team)}>
-                            Team Status
-                          </button>
+                          <div style={{ display: "flex", gap: "8px" }}>
+                            <button type="button" className="secondary-button" onClick={() => openTeamStatus(team)}>
+                              Team Status
+                            </button>
+                            <button type="button" className="secondary-button" onClick={() => openTeamChat(team)}>
+                              <MessageCircle size={14} />
+                              Chat
+                            </button>
+                          </div>
                         ) : userTeams.some((mine) => mine.id === team.id) ? (
-                          <span className="team-member-badge">Member</span>
-                        ) : (
-                          <button type="button" className="primary-button" disabled={teamActionLoading} onClick={() => joinTeam(team)}>
-                            {teamActionLoading ? "Joining..." : "Join Team"}
+                          <button type="button" className="secondary-button" onClick={() => openTeamChat(team)}>
+                            <MessageCircle size={14} />
+                            Chat
                           </button>
+                        ) : (
+                          <div style={{ display: "flex", gap: "8px" }}>
+                            <button type="button" className="secondary-button" onClick={() => openTeamPreview(team)}>
+                              View Team
+                            </button>
+                            <button type="button" className="primary-button" disabled={teamActionLoading} onClick={() => joinTeam(team)}>
+                              {teamActionLoading ? "Joining..." : "Join Team"}
+                            </button>
+                          </div>
                         )}
                       </div>
                     ))
@@ -3701,13 +6299,25 @@ return (
                           </div>
                           <div className="team-card-actions">
                             {isOwner ? (
-                              <button type="button" className="primary-button" onClick={() => openTeamStatus(team)}>
-                                Team Status
-                              </button>
+                              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                                <button type="button" className="primary-button" onClick={() => openTeamStatus(team)}>
+                                  Team Status
+                                </button>
+                                <button type="button" className="secondary-button" onClick={() => openTeamChat(team)}>
+                                  <MessageCircle size={14} />
+                                  Chat
+                                </button>
+                              </div>
                             ) : (
-                              <button type="button" className="secondary-button" disabled={teamActionLoading} onClick={() => leaveTeam(team)}>
-                                Leave Team
-                              </button>
+                              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                                <button type="button" className="secondary-button" onClick={() => openTeamChat(team)}>
+                                  <MessageCircle size={14} />
+                                  Chat
+                                </button>
+                                <button type="button" className="secondary-button" disabled={teamActionLoading} onClick={() => leaveTeam(team)}>
+                                  Leave Team
+                                </button>
+                              </div>
                             )}
                           </div>
                         </div>
@@ -3758,6 +6368,9 @@ return (
                             <div className="team-card-skills">Skills: {team.skills || "Not specified"}</div>
                           </div>
                           <div className="team-card-actions">
+                            <button type="button" className="secondary-button" onClick={() => openTeamPreview(team)}>
+                              View Team
+                            </button>
                             <button type="button" className="primary-button" disabled={teamActionLoading || slots <= 0} onClick={() => joinTeam(team)}>
                               {teamActionLoading ? "Joining..." : slots <= 0 ? "Team Full" : "Join Team"}
                             </button>
@@ -4860,6 +7473,62 @@ onSubmit={async (e) => {
       { merge: true }
     );
 
+    // Keep the owner name stored on existing teams in sync with the
+    // student's current profile name. The profile is the source of truth.
+    try {
+      const ownedTeamsSnapshot = await withTimeout(
+        getDocs(
+          query(
+            collection(db, "teams"),
+            where("createdBy", "==", authUser.uid)
+          )
+        ),
+        10000,
+        "Owned team profile sync"
+      );
+
+      if (!ownedTeamsSnapshot.empty) {
+        const syncBatch = writeBatch(db);
+        ownedTeamsSnapshot.docs.forEach((teamDoc) => {
+          syncBatch.update(teamDoc.ref, {
+            createdByName: updatedProfile.name || authUser.email || "CIT Student",
+          });
+        });
+        await syncBatch.commit();
+
+        setAllTeams((prev) =>
+          prev.map((team) =>
+            team.createdBy === authUser.uid
+              ? {
+                  ...team,
+                  createdByName:
+                    updatedProfile.name || authUser.email || "CIT Student",
+                }
+              : team
+          )
+        );
+
+        setUserTeams((prev) =>
+          prev.map((team) =>
+            team.createdBy === authUser.uid
+              ? {
+                  ...team,
+                  createdByName:
+                    updatedProfile.name || authUser.email || "CIT Student",
+                }
+              : team
+          )
+        );
+      }
+    } catch (teamNameSyncError) {
+      // Profile update should still succeed even if an old team's cached
+      // owner name cannot be synchronized. The UI uses profileData first.
+      console.error(
+        "TEAM OWNER NAME SYNC ERROR:",
+        teamNameSyncError
+      );
+    }
+
     setProfileData(updatedProfile);
 
     setEditProfileOpen(false);
@@ -4960,6 +7629,120 @@ onSubmit={async (e) => {
     </div>
   </div>
 )}
+
+{selectedMedia && (
+  <div
+    className="profile-media-viewer-overlay"
+    onClick={(event) => {
+      if (event.target === event.currentTarget) {
+        setSelectedMedia(null);
+      }
+    }}
+  >
+    <div className="profile-media-viewer" role="dialog" aria-modal="true">
+      <button
+        type="button"
+        className="profile-media-viewer-close"
+        onClick={() => setSelectedMedia(null)}
+        aria-label="Close media viewer"
+      >
+        <X size={18} />
+      </button>
+
+      <div className="profile-media-viewer-content">
+        {selectedMedia.type === "pdf" || selectedMedia.mimeType === "application/pdf" ? (
+          <iframe
+            src={selectedMedia.url}
+            title={selectedMedia.title || selectedMedia.fileName || "PDF preview"}
+          />
+        ) : (
+          <img
+            src={selectedMedia.url}
+            alt={selectedMedia.title || selectedMedia.fileName || "Achievement media"}
+          />
+        )}
+      </div>
+
+      <div className="profile-media-viewer-footer">
+        <div>
+          <strong>{selectedMedia.title || selectedMedia.fileName || "Achievement media"}</strong>
+          <span>{selectedMedia.mimeType || "Media"}</span>
+        </div>
+
+        {viewingOwnProfile && (
+          <button
+            type="button"
+            className="profile-media-delete-button"
+            onClick={() => deleteProfileMedia(selectedMedia)}
+          >
+            <Trash2 size={15} />
+            Remove
+          </button>
+        )}
+      </div>
+    </div>
+  </div>
+)}
+
+{mediaGalleryOpen && (
+  <div
+    className="profile-media-gallery-overlay"
+    onClick={(event) => {
+      if (event.target === event.currentTarget) {
+        setMediaGalleryOpen(false);
+      }
+    }}
+  >
+    <div className="profile-media-gallery-modal" role="dialog" aria-modal="true">
+      <div className="profile-media-gallery-header">
+        <div>
+          <span className="eyebrow">ACHIEVEMENTS & MEDIA</span>
+          <h3>Full Gallery</h3>
+        </div>
+        <button
+          type="button"
+          className="profile-media-viewer-close"
+          onClick={() => setMediaGalleryOpen(false)}
+          aria-label="Close gallery"
+        >
+          <X size={18} />
+        </button>
+      </div>
+
+      <div className="profile-media-gallery-grid">
+        {profileMedia.map((media) => {
+          const isPdf = media.type === "pdf" || media.mimeType === "application/pdf";
+          return (
+            <button
+              type="button"
+              className="profile-media-gallery-item"
+              key={media.id}
+              onClick={() => {
+                setMediaGalleryOpen(false);
+                setSelectedMedia(media);
+              }}
+            >
+              {isPdf ? (
+                <div className="profile-media-pdf-preview">
+                  <FileImage size={30} />
+                  <span>PDF</span>
+                </div>
+              ) : (
+                <img
+                  src={media.thumbnailUrl || media.url}
+                  alt={media.title || media.fileName || "Achievement media"}
+                  loading="lazy"
+                />
+              )}
+              <span>{media.title || media.fileName || "Achievement media"}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  </div>
+)}
+
 {/* ================= PROFILE ================= */}
 
 {/* FOOTER */}
@@ -5453,6 +8236,106 @@ const newResource = {
         </div>
       )}
 
+      {/* ================= TEAM PREVIEW POPUP ================= */}
+      {selectedTeamPreview && (
+        <div
+          className="hackathon-modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeTeamPreview();
+          }}
+        >
+          <div className="hackathon-modal team-status-modal team-invite-modal">
+            <button
+              type="button"
+              className="hackathon-modal-close"
+              onClick={closeTeamPreview}
+              aria-label="Close team preview"
+            >
+              <X size={18} />
+            </button>
+
+            <div className="hackathon-modal-icon">
+              <Rocket size={28} />
+            </div>
+            <span className="eyebrow">TEAM PREVIEW</span>
+            <h2>{selectedTeamPreview.title || "Hackathon Team"}</h2>
+            <p className="hackathon-modal-description">
+              {selectedTeamPreview.idea || "No project description has been added yet."}
+            </p>
+
+            {teamPreviewLoading ? (
+              <div className="team-status-loading">Loading team details...</div>
+            ) : (
+              <>
+                <div className="team-status-section">
+                  <div className="team-status-section-title">Team Leader</div>
+                  <div className="team-status-member">
+                    <div className="team-status-member-avatar"><User size={15} /></div>
+                    <div className="team-status-member-info">
+                      <strong>{teamPreviewOwner?.name || selectedTeamPreview.createdByName || "Team Leader"}</strong>
+                      <span>{teamPreviewOwner?.department || "CIT Student"}</span>
+                    </div>
+                    {teamPreviewOwner?.id && (
+                      <button
+                        type="button"
+                        className="team-member-profile-button"
+                        onClick={() => openTeamMemberProfile({ memberId: teamPreviewOwner.id, memberName: teamPreviewOwner.name })}
+                      >
+                        <User size={13} />
+                        View Profile
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="team-status-section">
+                  <div className="team-status-section-title">Members</div>
+                  {teamPreviewMembers.length === 0 ? (
+                    <div className="team-status-no-members">No other members have joined yet.</div>
+                  ) : (
+                    <div className="team-status-member-list">
+                      <div className="team-status-member-info" style={{ padding: "4px 0" }}>
+                        <strong>
+                          {teamPreviewMembers.slice(0, 3).map((person) => person.name || "CIT Student").join(", ")}
+                          {teamPreviewMembers.length > 3 ? ` + ${teamPreviewMembers.length - 3} more` : ""}
+                        </strong>
+                        <span>{teamPreviewMembers.length} other member{teamPreviewMembers.length === 1 ? "" : "s"}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="team-status-section">
+                  <div className="team-status-section-title">Team details</div>
+                  <div className="team-status-details">
+                    <span><strong>Skills</strong>{selectedTeamPreview.skills || "Not specified"}</span>
+                    <span><strong>Team size</strong>{Math.max(1, Array.isArray(selectedTeamPreview.memberIds) ? selectedTeamPreview.memberIds.length : 1)} / {Number(selectedTeamPreview.members) || 1}</span>
+                    <span><strong>Team ID</strong>{selectedTeamPreview.teamConnectId || `TEAM-${selectedTeamPreview.id.slice(0, 8).toUpperCase()}`}</span>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: "20px", display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+                  <button type="button" className="secondary-button" onClick={closeTeamPreview}>
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={teamActionLoading || (Number(selectedTeamPreview.members) || 1) <= (Array.isArray(selectedTeamPreview.memberIds) ? selectedTeamPreview.memberIds.length : 1)}
+                    onClick={async () => {
+                      await joinTeam(selectedTeamPreview);
+                      closeTeamPreview();
+                    }}
+                  >
+                    Join Team
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ================= TEAM STATUS POPUP ================= */}
       {teamStatusOpen && selectedTeam && (
         <div
@@ -5511,14 +8394,26 @@ const newResource = {
                             <strong>{member.memberName || "CIT Student"}</strong>
                             <span>{member.role === "owner" ? "Owner" : "Member"}</span>
                           </div>
-                          <button
-                            type="button"
-                            className="team-member-profile-button"
-                            onClick={() => openTeamMemberProfile(member)}
-                          >
-                            <User size={13} />
-                            View Profile
-                          </button>
+                          <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                            <button
+                              type="button"
+                              className="team-member-profile-button"
+                              onClick={() => openTeamMemberProfile(member)}
+                            >
+                              <User size={13} />
+                              View Profile
+                            </button>
+                            {member.role !== "owner" && (
+                              <button
+                                type="button"
+                                className="team-member-profile-button"
+                                disabled={teamActionLoading}
+                                onClick={() => removeTeamMember(selectedTeam, member)}
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
                         </div>
                       ))
                     )}
@@ -5533,8 +8428,615 @@ const newResource = {
                     <span><strong>Status</strong>{selectedTeamMembers.length >= (Number(selectedTeam.members) || 1) ? "Full" : "Open"}</span>
                   </div>
                 </div>
+
+                <div style={{ marginTop: "18px", display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={() => openTeamInviteStudents(selectedTeam)}
+                      disabled={teamInviteLoading || selectedTeamMembers.length >= (Number(selectedTeam.members) || 1)}
+                    >
+                      <UserPlus size={16} />
+                      Invite Students
+                    </button>
+
+                    <button
+                      type="button"
+                      className="secondary-button team-chat-open-button"
+                      onClick={() => openTeamChat(selectedTeam)}
+                    >
+                      <MessageCircle size={16} />
+                      Team Chat
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="team-delete-button"
+                    disabled={teamActionLoading}
+                    onClick={() => deleteTeam(selectedTeam)}
+                  >
+                    Delete Team
+                  </button>
+                </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ================= TEAM CHAT MODAL ================= */}
+      {teamChatOpen && teamChatTeam && (
+        <div
+          className="team-chat-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeTeamChat();
+          }}
+        >
+          <div
+            className="team-chat-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${teamChatTeam.title || "Team"} chat`}
+          >
+            <div className="team-chat-header">
+              <div className="team-chat-header-info">
+                <div className="team-chat-header-icon">
+                  <MessageCircle size={21} />
+                </div>
+                <div>
+                  <span className="eyebrow">TEAM CHAT</span>
+                  <h2>{teamChatTeam.title || "Hackathon Team"}</h2>
+                  <p>
+                    {selectedTeamMembers.length ||
+                      (Array.isArray(teamChatTeam.memberIds)
+                        ? teamChatTeam.memberIds.length
+                        : 1)}{" "}
+                    member{(
+                      selectedTeamMembers.length ||
+                      (Array.isArray(teamChatTeam.memberIds)
+                        ? teamChatTeam.memberIds.length
+                        : 1)
+                    ) === 1 ? "" : "s"}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="hackathon-modal-close"
+                onClick={closeTeamChat}
+                aria-label="Close team chat"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="team-chat-body">
+              {teamChatLoading ? (
+                <div className="team-chat-state">
+                  <div className="team-chat-state-icon">
+                    <MessageCircle size={22} />
+                  </div>
+                  <strong>Loading team chat...</strong>
+                  <span>Connecting to your team's messages.</span>
+                </div>
+              ) : teamChatError ? (
+                <div className="team-chat-state team-chat-error-state">
+                  <div className="team-chat-state-icon">
+                    <AlertTriangle size={22} />
+                  </div>
+                  <strong>Chat unavailable</strong>
+                  <span>{teamChatError}</span>
+                </div>
+              ) : teamChatMessages.length === 0 ? (
+                <div className="team-chat-state">
+                  <div className="team-chat-state-icon">
+                    <MessageCircle size={22} />
+                  </div>
+                  <strong>No messages yet</strong>
+                  <span>Start the conversation with your team.</span>
+                </div>
+              ) : (
+                <div className="team-chat-message-list">
+                  {teamChatMessages.map((message) => {
+                    const ownMessage = message.senderId === authUser.uid;
+
+                    return (
+                      <div
+                        className={`team-chat-message-row ${ownMessage ? "own" : ""}`}
+                        key={message.id}
+                      >
+                        <div className="team-chat-message-avatar">
+                          <User size={14} />
+                        </div>
+
+                        <div className="team-chat-message-stack">
+                          <div className="team-chat-message-meta">
+                            <strong>
+                              {ownMessage
+                                ? "You"
+                                : message.senderName || "CIT Student"}
+                            </strong>
+                            <span>{formatTeamChatTime(message.createdAt)}</span>
+                          </div>
+
+                          <div className="team-chat-message-content-wrap">
+                            <div className="team-chat-message-bubble">
+                              {message.message}
+                            </div>
+
+                            {!ownMessage && (
+                              <div className="team-chat-message-menu-wrap">
+                                <button
+                                  type="button"
+                                  className="team-chat-message-menu-button"
+                                  onClick={() =>
+                                    setTeamChatMessageMenu((current) =>
+                                      current === message.id ? null : message.id
+                                    )
+                                  }
+                                  aria-label="Message options"
+                                >
+                                  <MoreVertical size={15} />
+                                </button>
+
+                                {teamChatMessageMenu === message.id && (
+                                  <div className="team-chat-message-menu">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setTeamChatReportTarget(message);
+                                        setTeamChatReportReason("");
+                                        setTeamChatReportDescription("");
+                                        setTeamChatMessageMenu(null);
+                                      }}
+                                    >
+                                      <Flag size={14} />
+                                      Report message
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div ref={teamChatMessagesEndRef} />
+                </div>
+              )}
+            </div>
+
+            <form
+              className="team-chat-composer"
+              onSubmit={(e) => {
+                e.preventDefault();
+                sendTeamChatMessage();
+              }}
+            >
+              <input
+                type="text"
+                value={teamChatInput}
+                onChange={(e) => setTeamChatInput(e.target.value)}
+                placeholder="Write a message to your team..."
+                maxLength={2000}
+                disabled={teamChatSending || Boolean(teamChatError)}
+              />
+              <button
+                type="submit"
+                className="team-chat-send-button"
+                disabled={!teamChatInput.trim() || teamChatSending || Boolean(teamChatError)}
+                aria-label="Send message"
+              >
+                <Send size={17} />
+              </button>
+            </form>
+            <div className="team-chat-composer-note">
+              <span>Only current team members can access this chat.</span>
+              <span>{teamChatInput.length}/2000</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= TEAM CHAT REPORT MODAL ================= */}
+      {teamChatReportTarget && (
+        <div
+          className="team-chat-report-overlay"
+          style={{ zIndex: 10120 }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setTeamChatReportTarget(null);
+              setTeamChatReportReason("");
+              setTeamChatReportDescription("");
+            }
+          }}
+        >
+          <div
+            className="team-chat-report-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="team-chat-report-title"
+          >
+            <button
+              type="button"
+              className="hackathon-modal-close"
+              onClick={() => {
+                setTeamChatReportTarget(null);
+                setTeamChatReportReason("");
+                setTeamChatReportDescription("");
+              }}
+              aria-label="Close report"
+            >
+              <X size={18} />
+            </button>
+
+            <div className="team-chat-report-icon">
+              <Flag size={22} />
+            </div>
+            <span className="eyebrow">REPORT MESSAGE</span>
+            <h2 id="team-chat-report-title">Report this message?</h2>
+            <p>
+              Your report will be sent to the team owner for review. The message will not be deleted automatically.
+            </p>
+
+            <div className="team-chat-report-message-preview">
+              <strong>{teamChatReportTarget.senderName || "CIT Student"}</strong>
+              <span>{teamChatReportTarget.message}</span>
+            </div>
+
+            <label className="team-chat-report-label">
+              Reason
+              <select
+                value={teamChatReportReason}
+                onChange={(e) => setTeamChatReportReason(e.target.value)}
+              >
+                <option value="">Select a reason</option>
+                <option value="spam">Spam</option>
+                <option value="harassment">Harassment / bullying</option>
+                <option value="inappropriate">Inappropriate content</option>
+                <option value="hate_or_abusive">Hate / abusive content</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+
+            <label className="team-chat-report-label">
+              Additional details <span>Optional</span>
+              <textarea
+                value={teamChatReportDescription}
+                onChange={(e) => setTeamChatReportDescription(e.target.value)}
+                placeholder="Tell us anything that may help with the review..."
+                maxLength={1000}
+                rows={4}
+              />
+            </label>
+
+            <div className="team-chat-report-actions">
+              <button
+                type="button"
+                className="team-confirm-cancel"
+                onClick={() => {
+                  setTeamChatReportTarget(null);
+                  setTeamChatReportReason("");
+                  setTeamChatReportDescription("");
+                }}
+                disabled={teamChatReportSubmitting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="team-chat-report-submit"
+                onClick={submitTeamChatReport}
+                disabled={!teamChatReportReason || teamChatReportSubmitting}
+              >
+                <Flag size={15} />
+                {teamChatReportSubmitting ? "Submitting..." : "Submit Report"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= INVITE STUDENTS MODAL ================= */}
+      {teamInviteOpen && selectedTeam && (
+        <div
+          className="hackathon-modal-overlay"
+          style={{ zIndex: 10050 }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeTeamInviteStudents();
+          }}
+        >
+          <div className="hackathon-modal team-status-modal team-invite-modal">
+            <button
+              type="button"
+              className="hackathon-modal-close"
+              onClick={closeTeamInviteStudents}
+              aria-label="Close invite students"
+            >
+              <X size={18} />
+            </button>
+
+            <div className="hackathon-modal-icon">
+              <UserPlus size={26} />
+            </div>
+
+            <span className="eyebrow">INVITE STUDENTS</span>
+            <h2>{selectedTeam.title || "Hackathon Team"}</h2>
+            <p className="hackathon-modal-description">
+              Invite students who are connected with you.
+            </p>
+
+            <div className="team-invite-search-wrap">
+              <Search size={15} />
+              <input
+                type="text"
+                value={teamInviteSearch}
+                onChange={(e) => setTeamInviteSearch(e.target.value)}
+                placeholder="Search students..."
+              />
+            </div>
+
+            <div className="team-invite-student-list">
+              {teamInviteStudents.length === 0 ? (
+                <div className="team-status-no-members">
+                  No students match your search.
+                </div>
+              ) : (
+                teamInviteStudents.map((student) => {
+                  const connected = Boolean(getConnectionForStudent(student.id));
+                  const pending = getPendingConnectionRequest(student.id);
+                  const invitationForStudent = selectedTeamPendingInvites.find(
+                    (invite) =>
+                      invite.inviteeId === student.id &&
+                      invite.status === "pending"
+                  );
+                  const alreadyInvited = Boolean(invitationForStudent);
+                  const teamMember = selectedTeamMembers.some(
+                    (member) => member.memberId === student.id
+                  );
+                  const canInvite =
+                    connected &&
+                    !alreadyInvited &&
+                    !teamMember;
+
+                  return (
+                    <div
+                      className="team-invite-student"
+                      key={`team-invite-${student.id}`}
+                    >
+                      <div className="team-invite-student-info">
+                        <button
+                          type="button"
+                          className="team-invite-student-profile"
+                          onClick={() =>
+                            openTeamMemberProfile({
+                              memberId: student.id,
+                              memberName: student.name,
+                            })
+                          }
+                          title={`View ${student.name || "student"}'s profile`}
+                          aria-label={`View ${student.name || "student"}'s profile`}
+                        >
+                          <User size={15} />
+                        </button>
+
+                        <div>
+                          <strong>{student.name || "CIT Student"}</strong>
+                          <span>{student.year || "Year not added"}</span>
+                        </div>
+                      </div>
+
+                      <div className="team-invite-student-actions">
+                        <button
+                          type="button"
+                          className="team-invite-view-profile"
+                          onClick={() =>
+                            openTeamMemberProfile({
+                              memberId: student.id,
+                              memberName: student.name,
+                            })
+                          }
+                          title={`View ${student.name || "student"}'s profile`}
+                        >
+                          <User size={13} />
+                          View Profile
+                        </button>
+                        {connected ? (
+                          <span className="team-connection-status connected">
+                            <UserCheck size={13} />
+                            Connected
+                          </span>
+                        ) : pending ? (
+                          <span className="team-connection-status pending">
+                            <Mail size={13} />
+                            Request Pending
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            disabled={connectionActionLoading}
+                            onClick={() => sendConnectionRequest(student)}
+                          >
+                            <UserPlus size={13} />
+                            {connectionActionLoading
+                              ? "Sending..."
+                              : "Connect"}
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          className={`primary-button ${
+                            !canInvite ? "invite-locked" : ""
+                          }`}
+                          disabled={!canInvite || teamInviteLoading}
+                          onClick={() =>
+                            inviteStudentToTeam(student, selectedTeam)
+                          }
+                          title={
+                            teamMember
+                              ? "Already a team member."
+                              : alreadyInvited
+                              ? "Invitation already sent."
+                              : !connected
+                              ? "Connect with this student first."
+                              : "Invite student"
+                          }
+                        >
+                          <Mail size={13} />
+                          {teamMember
+                            ? "Member"
+                            : alreadyInvited
+                            ? "Pending"
+                            : teamInviteLoading
+                            ? "Sending..."
+                            : !connected
+                            ? "Invite"
+                            : "Invite"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="team-invite-footer-note">
+              <UserCheck size={13} />
+              <span>Only connected students can be invited.</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= CONNECTION CONFIRMATION MODAL ================= */}
+
+{connectionRemoveTarget && (
+  <div
+    className="team-confirm-overlay"
+    style={{ zIndex: 10000 }}
+    onClick={(e) => {
+      if (e.target === e.currentTarget) {
+        setConnectionRemoveTarget(null);
+      }
+    }}
+  >
+    <div
+      className="team-confirm-modal"
+      style={{
+        position: "relative",
+        zIndex: 10001,
+      }}
+      role="dialog"
+      aria-modal="true"
+    >
+      <button
+        type="button"
+        className="team-confirm-close"
+        onClick={() => setConnectionRemoveTarget(null)}
+        aria-label="Close confirmation"
+      >
+        <X size={17} />
+      </button>
+
+      <div className="team-confirm-icon danger">
+        <UserX size={22} />
+      </div>
+
+      <span className="eyebrow">
+        REMOVE CONNECTION
+      </span>
+
+      <h3>
+        Remove{" "}
+        {connectionRemoveTarget.personName || "this student"}?
+      </h3>
+
+      <p>
+        They will be removed from your connections and
+        you will no longer be connected on CampusConnect.
+      </p>
+
+      <div className="team-confirm-actions">
+        <button
+          type="button"
+          className="team-confirm-cancel"
+          onClick={() => setConnectionRemoveTarget(null)}
+          disabled={connectionActionLoading}
+        >
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          className="team-confirm-danger"
+          disabled={connectionActionLoading}
+          onClick={confirmRemoveConnection}
+        >
+          {connectionActionLoading
+            ? "Removing..."
+            : "Remove Connection"}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+      {/* ================= TEAM CONFIRMATION MODALS ================= */}
+      {teamRemoveTarget && (
+        <div
+          className="team-confirm-overlay"
+          style={{ zIndex: 10000 }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setTeamRemoveTarget(null);
+          }}
+        >
+          <div
+            className="team-confirm-modal"
+            style={{ position: "relative", zIndex: 10001 }}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="team-confirm-icon"><UserX size={22} /></div>
+            <span className="eyebrow">TEAM MEMBER</span>
+            <h3>Remove {teamRemoveTarget.member.memberName || "this member"}?</h3>
+            <p>They will be removed from <strong>{teamRemoveTarget.team.title || "this team"}</strong> and will lose access to the team.</p>
+            <div className="team-confirm-actions">
+              <button type="button" className="team-confirm-cancel" onClick={() => setTeamRemoveTarget(null)}>Cancel</button>
+              <button type="button" className="team-confirm-danger" disabled={teamActionLoading} onClick={confirmRemoveTeamMember}>{teamActionLoading ? "Removing..." : "Remove Member"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {teamDeleteTarget && (
+        <div
+          className="team-confirm-overlay"
+          style={{ zIndex: 10000 }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setTeamDeleteTarget(null);
+          }}
+        >
+          <div
+            className="team-confirm-modal"
+            style={{ position: "relative", zIndex: 10001 }}
+            role="dialog"
+            aria-modal="true"
+          >
+            <button type="button" className="team-confirm-close" onClick={() => setTeamDeleteTarget(null)} aria-label="Close confirmation"><X size={17} /></button>
+            <div className="team-confirm-icon danger"><Trash2 size={22} /></div>
+            <span className="eyebrow">DELETE TEAM</span>
+            <h3>Delete {teamDeleteTarget.title || "this team"}?</h3>
+            <p>This will permanently remove the team, its memberships, and pending invitations.</p>
+            <div className="team-confirm-actions">
+              <button type="button" className="team-confirm-cancel" onClick={() => setTeamDeleteTarget(null)}>Cancel</button>
+              <button type="button" className="team-confirm-danger" disabled={teamActionLoading} onClick={confirmDeleteTeam}>{teamActionLoading ? "Deleting..." : "Delete Team"}</button>
+            </div>
           </div>
         </div>
       )}
@@ -5605,10 +9107,49 @@ const newResource = {
             <UserX size={16} /> Decline
           </button>
         </div>
-      ) : getPendingConnectionRequest(selectedStudent.id) ? (
-        <button className="secondary-button" type="button" disabled>
+      ) : getPendingConnectionRequest(selectedStudent.id)?.senderId === authUser?.uid ? (
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={connectionActionLoading}
+          onClick={() =>
+            setConnectionRequestCancelTarget(
+              getPendingConnectionRequest(selectedStudent.id)
+            )
+          }
+          title="Click to cancel your pending connection request"
+        >
           <Mail size={16} /> Request Pending
         </button>
+      ) : getPendingConnectionRequest(selectedStudent.id) ? (
+        <div className="connection-response-actions">
+          <button
+            className="primary-button"
+            type="button"
+            disabled={connectionActionLoading}
+            onClick={() =>
+              respondToConnectionRequest(
+                getIncomingConnectionRequest(selectedStudent.id),
+                "accepted"
+              )
+            }
+          >
+            <UserCheck size={16} /> Accept
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={connectionActionLoading}
+            onClick={() =>
+              respondToConnectionRequest(
+                getIncomingConnectionRequest(selectedStudent.id),
+                "declined"
+              )
+            }
+          >
+            <UserX size={16} /> Decline
+          </button>
+        </div>
       ) : (
         <button
           className="primary-button"
@@ -5620,6 +9161,23 @@ const newResource = {
           {connectionActionLoading ? "Sending..." : "Connect"}
         </button>
       )}
+
+
+      <button
+        type="button"
+        className="student-profile-full-button"
+        onClick={() => {
+          const student = selectedStudent;
+          setSelectedStudent(null);
+          openTeamMemberProfile({
+            memberId: student.id,
+            memberName: student.name,
+          });
+        }}
+      >
+        <User size={15} />
+        View Full Profile
+      </button>
 
       {getConnectionForStudent(selectedStudent.id) && userTeams.filter((team) => team.createdBy === authUser.uid).length > 0 && (
         <div className="team-invite-panel">
@@ -5643,6 +9201,77 @@ const newResource = {
         </div>
       )}
 
+    </div>
+  </div>
+)}
+{connectionRequestCancelTarget && (
+  <div
+    className="team-confirm-overlay"
+    style={{ zIndex: 10000 }}
+    onClick={(e) => {
+      if (e.target === e.currentTarget) {
+        setConnectionRequestCancelTarget(null);
+      }
+    }}
+  >
+    <div
+      className="team-confirm-modal"
+      style={{
+        position: "relative",
+        zIndex: 10001,
+      }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="cancel-connection-request-title"
+    >
+      <button
+        type="button"
+        className="team-confirm-close"
+        onClick={() => setConnectionRequestCancelTarget(null)}
+        aria-label="Close confirmation"
+      >
+        <X size={17} />
+      </button>
+
+      <div className="team-confirm-icon">
+        <Mail size={22} />
+      </div>
+
+      <span className="eyebrow">CANCEL REQUEST</span>
+
+      <h3 id="cancel-connection-request-title">
+        Cancel connection request?
+      </h3>
+
+      <p>
+        Your pending connection request to{" "}
+        <strong>
+          {connectionRequestCancelTarget.receiverName || "this student"}
+        </strong>{" "}
+        will be withdrawn.
+      </p>
+
+      <div className="team-confirm-actions">
+        <button
+          type="button"
+          className="team-confirm-cancel"
+          onClick={() => setConnectionRequestCancelTarget(null)}
+          disabled={connectionActionLoading}
+        >
+          Keep Request
+        </button>
+
+        <button
+          type="button"
+          className="team-confirm-danger"
+          disabled={connectionActionLoading}
+          onClick={() =>
+            cancelConnectionRequest(connectionRequestCancelTarget)
+          }
+        >
+          {connectionActionLoading ? "Cancelling..." : "Cancel Request"}
+        </button>
+      </div>
     </div>
   </div>
 )}
@@ -5715,8 +9344,10 @@ const newResource = {
           className="settings-action"
           onClick={() => {
             setAccountSettingsOpen(false);
+            setViewedProfile(null);
             setActiveNav("profile");
             setProfilePageOpen(true);
+            scrollToPageTop();
           }}
         >
           View
@@ -5757,7 +9388,11 @@ const newResource = {
           className="settings-action"
           onClick={() => {
             setAccountSettingsOpen(false);
-            setNotificationOpen(true);
+            if (!notificationOpen) {
+              openNotifications();
+            } else {
+              setNotificationOpen(true);
+            }
           }}
         >
           View

@@ -3,8 +3,10 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Checks that the authenticated user's Firebase Auth
-    // email belongs to the CIT domain.
+    // =========================================================
+    // AUTH HELPERS
+    // =========================================================
+
     function isCITUser() {
       return request.auth != null
         && request.auth.token.email != null
@@ -13,46 +15,651 @@ service cloud.firestore {
         );
     }
 
-    // Checks that the authenticated user's email is both
-    // a CIT email and verified.
     function isVerifiedCITUser() {
       return isCITUser()
         && request.auth.token.email_verified == true;
     }
 
-    // =========================
-    // USER PROFILES
-    // =========================
+
+    // =========================================================
+    // USERS
+    // =========================================================
+
     match /users/{userId} {
 
-      // A newly registered CIT user needs to create their
-      // profile before they have verified their email.
-      // They can ONLY create their own profile.
       allow create: if isCITUser()
         && request.auth.uid == userId;
 
-      // After verification, users can access and modify
-      // only their own profile.
-      allow read, update, delete: if isVerifiedCITUser()
+      allow read: if isVerifiedCITUser();
+
+      allow update, delete: if isVerifiedCITUser()
         && request.auth.uid == userId;
     }
 
-    // =========================
+
+    // =========================================================
     // COMMUNITY RESOURCES
-    // =========================
+    // =========================================================
+
     match /communityResources/{resourceId} {
 
-      // Only verified CIT users can view resources.
       allow read: if isVerifiedCITUser();
 
-      // Only verified CIT users can create resources,
-      // and the resource must belong to the authenticated user.
       allow create: if isVerifiedCITUser()
         && request.resource.data.userId == request.auth.uid;
 
-      // Only the owner of a resource can modify or delete it.
       allow update, delete: if isVerifiedCITUser()
         && resource.data.userId == request.auth.uid;
+    }
+
+
+    // =========================================================
+    // HACKATHONS
+    // =========================================================
+
+    match /hackathons/{hackathonId} {
+
+      allow read: if isVerifiedCITUser();
+    }
+
+
+    // =========================================================
+    // EVENTS
+    // =========================================================
+
+    match /events/{eventId} {
+
+      allow read: if isVerifiedCITUser();
+    }
+
+
+    // =========================================================
+    // TEAMS
+    // =========================================================
+
+    match /teams/{teamId} {
+
+      // All verified CIT students can see teams.
+      allow read: if isVerifiedCITUser();
+
+      // Only the creator can create their own team.
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.createdBy == request.auth.uid;
+
+      allow update: if isVerifiedCITUser()
+        && (
+          // ===================================================
+          // CASE 1 — TEAM OWNER
+          // ===================================================
+          resource.data.createdBy == request.auth.uid
+
+          ||
+
+          // ===================================================
+          // CASE 2 — NORMAL TEAM JOIN
+          // ===================================================
+          (
+            request.resource.data.createdBy == resource.data.createdBy
+
+            && request.resource.data.diff(resource.data)
+              .affectedKeys()
+              .hasOnly([
+                'memberIds',
+                'status'
+              ])
+
+            // User was not already a member.
+            && !(request.auth.uid in resource.data.get(
+              'memberIds',
+              [resource.data.createdBy]
+            ))
+
+            // User is present in the new member list.
+            && request.auth.uid in request.resource.data.get(
+              'memberIds',
+              []
+            )
+
+            // User is NOT blocked.
+            && !(request.auth.uid in resource.data.get(
+              'blockedMemberIds',
+              []
+            ))
+
+            // Exactly one member was added.
+            && request.resource.data.get(
+              'memberIds',
+              []
+            ).size()
+              ==
+              resource.data.get(
+                'memberIds',
+                [resource.data.createdBy]
+              ).size() + 1
+          )
+
+          ||
+
+          // ===================================================
+          // CASE 4 — MEMBER LEAVE
+          // ===================================================
+          (
+            request.resource.data.createdBy == resource.data.createdBy
+
+            && request.resource.data.diff(resource.data)
+              .affectedKeys()
+              .hasOnly([
+                'memberIds',
+                'status'
+              ])
+
+            // User was previously a member.
+            && request.auth.uid in resource.data.get(
+              'memberIds',
+              [resource.data.createdBy]
+            )
+
+            // User is no longer a member.
+            && !(request.auth.uid in request.resource.data.get(
+              'memberIds',
+              []
+            ))
+
+            // Exactly one member was removed.
+            && request.resource.data.get(
+              'memberIds',
+              []
+            ).size()
+              ==
+              resource.data.get(
+                'memberIds',
+                [resource.data.createdBy]
+              ).size() - 1
+          )
+        );
+
+      // Only the team owner can delete the team.
+      allow delete: if isVerifiedCITUser()
+        && resource.data.createdBy == request.auth.uid;
+    }
+
+    // =========================================================
+    // HACKATHON REGISTRATIONS
+    // =========================================================
+
+    match /hackathonRegistrations/{registrationId} {
+
+      allow read: if isVerifiedCITUser()
+        && resource.data.userId == request.auth.uid;
+
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.userId == request.auth.uid;
+
+      allow update, delete: if isVerifiedCITUser()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == request.auth.uid;
+    }
+
+
+    // =========================================================
+    // HACKATHON INTERESTS
+    // =========================================================
+
+    match /hackathonInterests/{interestId} {
+
+      allow read: if isVerifiedCITUser()
+        && resource.data.userId == request.auth.uid;
+
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.userId == request.auth.uid;
+
+      allow delete: if isVerifiedCITUser()
+        && resource.data.userId == request.auth.uid;
+
+      allow update: if false;
+    }
+
+
+    // =========================================================
+    // EVENT INTERESTS
+    // =========================================================
+
+    match /eventInterests/{interestId} {
+
+      allow read: if isVerifiedCITUser()
+        && resource.data.userId == request.auth.uid;
+
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.userId == request.auth.uid;
+
+      allow delete: if isVerifiedCITUser()
+        && resource.data.userId == request.auth.uid;
+
+      allow update: if false;
+    }
+
+
+    // =========================================================
+    // CAMPUSCONNECT IDS
+    // =========================================================
+
+    match /campusConnectIds/{campusId} {
+
+      allow read: if isVerifiedCITUser();
+
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.userId == request.auth.uid
+        && !exists(
+          /databases/$(database)/documents/campusConnectIds/$(campusId)
+        );
+
+      allow update, delete: if false;
+    }
+
+
+    // =========================================================
+    // CONNECTION REQUESTS
+    // =========================================================
+
+    match /connectionRequests/{requestId} {
+
+      allow read: if isVerifiedCITUser()
+        && (
+          resource.data.senderId == request.auth.uid
+          || resource.data.receiverId == request.auth.uid
+        );
+
+
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.senderId == request.auth.uid
+        && request.resource.data.receiverId != request.auth.uid
+        && request.resource.data.status == 'pending';
+
+
+      allow update: if isVerifiedCITUser()
+        && resource.data.receiverId == request.auth.uid
+        && resource.data.senderId != request.auth.uid
+        && resource.data.status == 'pending'
+        && request.resource.data.senderId == resource.data.senderId
+        && request.resource.data.receiverId == resource.data.receiverId
+        && request.resource.data.status in [
+          'accepted',
+          'declined'
+        ];
+
+
+      allow delete: if isVerifiedCITUser()
+        && (
+          resource.data.senderId == request.auth.uid
+          || resource.data.receiverId == request.auth.uid
+        );
+    }
+
+
+    // =========================================================
+    // CONNECTIONS
+    // =========================================================
+
+    match /connections/{connectionId} {
+
+      allow read: if isVerifiedCITUser()
+        && request.auth.uid in resource.data.userIds;
+
+
+      allow create: if isVerifiedCITUser()
+        && request.auth.uid in request.resource.data.userIds
+        && request.resource.data.userIds.size() == 2
+        && exists(
+          /databases/$(database)/documents/connectionRequests/$(request.resource.data.sourceRequestId)
+        )
+        && get(
+          /databases/$(database)/documents/connectionRequests/$(request.resource.data.sourceRequestId)
+        ).data.status == 'accepted'
+        && get(
+          /databases/$(database)/documents/connectionRequests/$(request.resource.data.sourceRequestId)
+        ).data.receiverId == request.auth.uid;
+
+
+      allow update: if false;
+
+      allow delete: if isVerifiedCITUser()
+        && request.auth.uid in resource.data.userIds;
+    }
+
+
+    // =========================================================
+    // NOTIFICATIONS
+    // =========================================================
+
+    match /notifications/{notificationId} {
+
+      // Users can only read their own notifications.
+      allow read: if isVerifiedCITUser()
+        && resource.data.recipientId == request.auth.uid;
+
+
+      // A user can create a notification for somebody else.
+      // The actor must be the authenticated user.
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.actorId == request.auth.uid
+        && request.resource.data.recipientId != request.auth.uid;
+
+
+      // Users can mark their own notifications as read.
+      // They cannot change the notification contents.
+      allow update: if isVerifiedCITUser()
+        && resource.data.recipientId == request.auth.uid
+        && request.resource.data.recipientId
+          == resource.data.recipientId
+        && request.resource.data.diff(resource.data)
+          .affectedKeys()
+          .hasOnly(['read'])
+        && request.resource.data.read == true;
+
+
+      // Users can clear/delete their own notifications.
+      allow delete: if isVerifiedCITUser()
+        && resource.data.recipientId == request.auth.uid;
+    }
+
+
+    // =========================================================
+    // TEAM INVITATIONS
+    // =========================================================
+
+    match /teamInvitations/{invitationId} {
+
+      // Invitee, inviter, or the owner of the related team can read.
+      allow read: if isVerifiedCITUser()
+        && (
+          resource.data.inviteeId == request.auth.uid
+          || resource.data.inviterId == request.auth.uid
+          || (
+            resource.data.teamId != null
+            && exists(
+              /databases/$(database)/documents/teams/$(resource.data.teamId)
+            )
+            && get(
+              /databases/$(database)/documents/teams/$(resource.data.teamId)
+            ).data.createdBy == request.auth.uid
+          )
+        );
+
+
+      // Only the team owner can send an invitation.
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.inviterId == request.auth.uid
+        && request.resource.data.inviteeId != request.auth.uid
+        && request.resource.data.status == 'pending'
+        && exists(
+          /databases/$(database)/documents/teams/$(request.resource.data.teamId)
+        )
+        && get(
+          /databases/$(database)/documents/teams/$(request.resource.data.teamId)
+        ).data.createdBy == request.auth.uid;
+
+
+      // Invitee can accept/decline.
+      // Inviter can recreate a declined invitation.
+      allow update: if isVerifiedCITUser()
+        && (
+    (
+      // Invitee can accept/decline a pending invitation
+      resource.data.inviteeId == request.auth.uid
+      && resource.data.status == 'pending'
+      && request.resource.data.teamId == resource.data.teamId
+      && request.resource.data.inviterId == resource.data.inviterId
+      && request.resource.data.inviteeId == resource.data.inviteeId
+      && request.resource.data.status in [
+        'accepted',
+        'declined'
+      ]
+    )
+
+    ||
+
+    (
+      // Inviter can resend a declined OR accepted invitation
+      resource.data.inviterId == request.auth.uid
+      && resource.data.status in [
+        'declined',
+        'accepted'
+      ]
+      && request.resource.data.teamId == resource.data.teamId
+      && request.resource.data.inviterId == resource.data.inviterId
+      && request.resource.data.inviteeId == resource.data.inviteeId
+      && request.resource.data.status == 'pending'
+    )
+  );
+
+      // Invitee, inviter, or the team owner can delete an invitation.
+      allow delete: if isVerifiedCITUser()
+        && (
+          resource.data.inviterId == request.auth.uid
+          || resource.data.inviteeId == request.auth.uid
+          || (
+            resource.data.teamId != null
+            && exists(
+              /databases/$(database)/documents/teams/$(resource.data.teamId)
+            )
+            && get(
+              /databases/$(database)/documents/teams/$(resource.data.teamId)
+            ).data.createdBy == request.auth.uid
+          )
+        );
+    }
+
+
+
+
+    // =========================================================
+    // TEAM CHAT MESSAGES
+    // =========================================================
+
+    // Team chat messages live under:
+    // teamChats/{teamId}/messages/{messageId}
+    //
+    // Access is based on the team's memberIds field rather than
+    // a composite teamMemberships document path. This avoids
+    // fragile document-path interpolation in Firestore rules.
+    match /teamChats/{teamId}/messages/{messageId} {
+
+      // Only the team owner or a current team member can read chat.
+      allow read: if isVerifiedCITUser()
+        && (
+          get(
+            /databases/$(database)/documents/teams/$(teamId)
+          ).data.createdBy == request.auth.uid
+          || request.auth.uid in get(
+            /databases/$(database)/documents/teams/$(teamId)
+          ).data.get('memberIds', [])
+        );
+
+      // Only the team owner or a current team member can send.
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.teamId == teamId
+        && request.resource.data.senderId == request.auth.uid
+        && request.resource.data.message is string
+        && request.resource.data.message.size() > 0
+        && request.resource.data.message.size() <= 2000
+        && request.resource.data.senderName is string
+        && request.resource.data.senderName.size() <= 100
+        && (
+          get(
+            /databases/$(database)/documents/teams/$(teamId)
+          ).data.createdBy == request.auth.uid
+          || request.auth.uid in get(
+            /databases/$(database)/documents/teams/$(teamId)
+          ).data.get('memberIds', [])
+        );
+
+      // Chat messages cannot be edited or deleted by clients.
+      allow update, delete: if false;
+    }
+
+
+    // =========================================================
+    // TEAM CHAT REPORTS
+    // =========================================================
+
+    // Reports are private moderation records.
+    // Team members can submit reports; only the team owner
+    // can read them. Clients cannot edit or delete reports.
+    match /teamChatReports/{reportId} {
+
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.teamId is string
+        && request.resource.data.messageId is string
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.reportedUserId != request.auth.uid
+        && request.resource.data.reason in [
+          'spam',
+          'harassment',
+          'inappropriate',
+          'hate_or_abusive',
+          'other'
+        ]
+        && request.resource.data.status == 'pending'
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 1000
+
+        // The reported message must actually exist.
+        && exists(
+          /databases/$(database)/documents/teamChats/$(request.resource.data.teamId)/messages/$(request.resource.data.messageId)
+        )
+
+        // The reported user must be the sender of that message.
+        && get(
+          /databases/$(database)/documents/teamChats/$(request.resource.data.teamId)/messages/$(request.resource.data.messageId)
+        ).data.senderId == request.resource.data.reportedUserId
+
+        // Reporter must currently belong to the team or own it.
+        && (
+          get(
+            /databases/$(database)/documents/teams/$(request.resource.data.teamId)
+          ).data.createdBy == request.auth.uid
+          || request.auth.uid in get(
+            /databases/$(database)/documents/teams/$(request.resource.data.teamId)
+          ).data.get('memberIds', [])
+        );
+
+      // Only the team owner can read reports for that team.
+      allow read: if isVerifiedCITUser()
+        && exists(
+          /databases/$(database)/documents/teams/$(resource.data.teamId)
+        )
+        && get(
+          /databases/$(database)/documents/teams/$(resource.data.teamId)
+        ).data.createdBy == request.auth.uid;
+
+      // Reports are immutable from the client.
+      allow update, delete: if false;
+    }
+
+    // =========================================================
+    // PROFILE MEDIA / ACHIEVEMENTS
+    // =========================================================
+
+    // Media metadata is stored in Firestore. The actual image/file
+    // is stored in ImageKit; this collection stores the reference.
+    //
+    // Expected fields include: userId, type, url, title, description,
+    // createdAt, and optionally thumbnailUrl/imageKitFileId.
+    match /profileMedia/{mediaId} {
+
+      // Verified CIT students can view profile media.
+      allow read: if isVerifiedCITUser();
+
+      // A user may create media only for their own profile.
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.type is string
+        && request.resource.data.url is string
+        && request.resource.data.url.size() > 0
+        && request.resource.data.url.size() <= 2000
+        && request.resource.data.title is string
+        && request.resource.data.title.size() <= 200
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 1000;
+
+      // Only the owner of the media may edit its metadata.
+      allow update: if isVerifiedCITUser()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.type is string
+        && request.resource.data.url is string
+        && request.resource.data.title is string
+        && request.resource.data.title.size() <= 200
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 1000;
+
+      // Only the owner may remove their media metadata.
+      allow delete: if isVerifiedCITUser()
+        && resource.data.userId == request.auth.uid;
+    }
+
+
+    // =========================================================
+    // TEAM MEMBERSHIPS
+    // =========================================================
+
+    match /teamMemberships/{membershipId} {
+
+      // A member can read their own membership.
+      // A team owner can read memberships belonging to their team.
+     allow read: if isVerifiedCITUser()
+  && (
+    membershipId.matches('^.+_' + request.auth.uid + '$')
+
+    ||
+
+    (
+      resource.data.memberId == request.auth.uid
+    )
+
+    ||
+
+    (
+      resource.data.teamId != null
+      && get(
+        /databases/$(database)/documents/teams/$(resource.data.teamId)
+      ).data.createdBy == request.auth.uid
+    )
+  );
+
+      // A student can create their own membership.
+      //
+      // This supports BOTH:
+      // - direct Join Team
+      // - accepting a team invitation
+      //
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.memberId == request.auth.uid
+        && request.resource.data.teamId != null;
+
+
+      // A member can delete their own membership.
+      //
+      // A team owner can also delete a member's membership
+      // when removing that member.
+      allow delete: if isVerifiedCITUser()
+        && (
+          resource.data.memberId == request.auth.uid
+          || get(
+            /databases/$(database)/documents/teams/$(resource.data.teamId)
+          ).data.createdBy == request.auth.uid
+        );
+
+
+      // Members may update their own membership.
+      // Team owners may also update membership records.
+      allow update: if isVerifiedCITUser()
+        && (
+          resource.data.memberId == request.auth.uid
+          || get(
+            /databases/$(database)/documents/teams/$(resource.data.teamId)
+          ).data.createdBy == request.auth.uid
+        );
     }
   }
 }
