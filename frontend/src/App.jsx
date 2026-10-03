@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   Home,
   Trophy,
@@ -36,6 +37,10 @@ Megaphone,
   AlertTriangle,
   Upload,
   FileImage,
+  PanelLeftClose,
+  PanelLeftOpen,
+  ExternalLink,
+  Star,
 } from "lucide-react";
 
 import { upload as imageKitUpload } from "@imagekit/javascript";
@@ -76,6 +81,61 @@ import {
 
 const COLLEGE_EMAIL_DOMAIN = "@citchennai.net";
 
+
+const StyledSelect = ({ value, options, onChange, ariaLabel, className = "" }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event) => {
+      if (ref.current && !ref.current.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [open]);
+
+  return (
+    <div ref={ref} className={`styled-select ${open ? "open" : ""} ${className}`}>
+      <button
+        type="button"
+        className="styled-select-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <span>{value}</span>
+        <ChevronDown size={15} />
+      </button>
+
+      {open && (
+        <div className="styled-select-menu" role="listbox" aria-label={ariaLabel}>
+          {options.map((option) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected={value === option}
+              className={`styled-select-option ${value === option ? "selected" : ""}`}
+              key={option}
+              onClick={() => {
+                onChange(option);
+                setOpen(false);
+              }}
+            >
+              <span>{option}</span>
+              {value === option && <CheckCircle2 size={14} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+
 const withTimeout = (promise, milliseconds, operationName) => {
   return Promise.race([
     promise,
@@ -88,6 +148,103 @@ const withTimeout = (promise, milliseconds, operationName) => {
       )
     ),
   ]);
+};
+
+// =========================================================
+// IMAGEKIT AUTHENTICATION
+// Uses the existing Vercel ImageKit authentication endpoint.
+// The browser sends the signed-in Firebase ID token; the
+// ImageKit private key remains server-side on Vercel.
+// =========================================================
+const IMAGEKIT_AUTH_ENDPOINT =
+  import.meta.env.VITE_IMAGEKIT_AUTH_URL?.trim() ||
+  "https://campus-connect-khaki-kappa.vercel.app/api/imagekit-auth";
+
+const getImageKitAuth = async (user) => {
+  if (!user) {
+    throw new Error("AUTH_REQUIRED");
+  }
+
+  let idToken = "";
+  try {
+    idToken = await user.getIdToken();
+  } catch (error) {
+    console.error("FIREBASE ID TOKEN ERROR:", error);
+    throw new Error("AUTH_TOKEN_FAILED");
+  }
+
+  if (!idToken) {
+    throw new Error("AUTH_TOKEN_MISSING");
+  }
+
+  try {
+    const authResponse = await fetch(IMAGEKIT_AUTH_ENDPOINT, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${idToken}`,
+      },
+    });
+
+    const contentType = authResponse.headers.get("content-type") || "";
+    const responseText = await authResponse.text();
+
+    if (!authResponse.ok) {
+      console.error("IMAGEKIT AUTH HTTP ERROR:", {
+        status: authResponse.status,
+        statusText: authResponse.statusText,
+        contentType,
+        response: responseText.slice(0, 500),
+      });
+      throw new Error("IMAGEKIT_AUTH_HTTP_ERROR");
+    }
+
+    if (!contentType.toLowerCase().includes("application/json")) {
+      console.error("IMAGEKIT AUTH NON-JSON RESPONSE:", {
+        contentType,
+        response: responseText.slice(0, 500),
+      });
+      throw new Error("IMAGEKIT_AUTH_INVALID_RESPONSE");
+    }
+
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (error) {
+      console.error("IMAGEKIT AUTH JSON PARSE ERROR:", error);
+      throw new Error("IMAGEKIT_AUTH_INVALID_RESPONSE");
+    }
+
+    const publicKey =
+      (data?.publicKey ||
+        import.meta.env.VITE_IMAGEKIT_PUBLIC_KEY ||
+        "").trim();
+
+    if (!data?.token || !data?.signature || !data?.expire || !publicKey) {
+      console.error("IMAGEKIT AUTH RESPONSE INVALID:", {
+        hasToken: Boolean(data?.token),
+        hasSignature: Boolean(data?.signature),
+        hasExpire: Boolean(data?.expire),
+        hasPublicKey: Boolean(publicKey),
+        serverError: data?.error || "",
+      });
+      throw new Error("IMAGEKIT_AUTH_RESPONSE_INVALID");
+    }
+
+    return {
+      token: data.token,
+      signature: data.signature,
+      expire: data.expire,
+      publicKey,
+    };
+  } catch (error) {
+    console.error("IMAGEKIT AUTH ERROR:", {
+      message: error?.message,
+      endpoint: IMAGEKIT_AUTH_ENDPOINT,
+    });
+
+    throw error;
+  }
 };
 
 const isCollegeEmail = (email) => {
@@ -195,6 +352,1501 @@ const ensureCampusConnectId = async (user) => {
   throw new Error("Unable to generate a unique CampusConnect ID.");
 };
 
+
+const COMPETITION_SHEET_ID = "1FJeOaJj9fA5_KzY7m8DE5sOVczXvG7YHxplOmaKfNLA";
+const COMPETITION_SHEET_NAME = "List of Competitions 26-27";
+const COMPETITION_SHEET_URL = `https://docs.google.com/spreadsheets/d/${COMPETITION_SHEET_ID}/edit?usp=sharing`;
+
+const normalizeSheetText = (value) =>
+  (value ?? "").toString().trim();
+
+const parseSheetDate = (value) => {
+  if (!value) return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+
+  const text = normalizeSheetText(value);
+  if (!text) return null;
+
+  // Handles Google Visualization date values such as Date(2026,9,6).
+  const visualizationMatch = text.match(/^Date\((\d{4}),\s*(\d{1,2}),\s*(\d{1,2})/i);
+  if (visualizationMatch) {
+    const [, year, month, day] = visualizationMatch;
+    const date = new Date(Number(year), Number(month), Number(day));
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const startOfLocalDay = (date = new Date()) => {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
+};
+
+const isRegistrationActive = (competition) => {
+  const deadline = parseSheetDate(competition.registrationDeadline);
+  if (!deadline) return false;
+
+  const normalizedStatus = normalizeSheetText(competition.sourceStatus).toLowerCase();
+  const activeStatuses = [
+    "on going",
+    "ongoing",
+    "open",
+    "active",
+    "registration open",
+    "registrations open",
+  ];
+
+  return (
+    activeStatuses.some((status) => normalizedStatus === status) &&
+    deadline >= startOfLocalDay()
+  );
+};
+
+const getCompetitionDaysRemaining = (competition) => {
+  const deadline = parseSheetDate(competition.registrationDeadline);
+  if (!deadline) return null;
+
+  const today = startOfLocalDay();
+  const deadlineDay = startOfLocalDay(deadline);
+  return Math.ceil((deadlineDay - today) / 86400000);
+};
+
+const formatOpportunityDate = (value) => {
+  const date = parseSheetDate(value);
+  if (!date) return "DATE TBA";
+  return date.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+};
+
+const isGoogleSpreadsheetUrl = (value) => {
+  if (typeof value !== "string" || !value.trim()) return false;
+  try {
+    const parsed = new URL(value.trim());
+    return (
+      parsed.hostname.toLowerCase() === "docs.google.com" &&
+      parsed.pathname.toLowerCase().startsWith("/spreadsheets/")
+    );
+  } catch {
+    return false;
+  }
+};
+
+const normalizeCompetitionKey = (value) =>
+  normalizeSheetText(value)
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+
+const decodeHtmlEntities = (value) => {
+  if (typeof value !== "string") return "";
+  if (typeof document === "undefined") return value;
+  const textarea = document.createElement("textarea");
+  textarea.innerHTML = value;
+  return textarea.value;
+};
+
+const normalizeOfficialUrl = (value) => {
+  if (typeof value !== "string") return "";
+  const text = decodeHtmlEntities(value.trim());
+  if (!text) return "";
+
+  const candidates = [];
+
+  for (const match of text.matchAll(/HYPERLINK\s*\(\s*["'](https?:\/\/[^"']+)["']/gi)) {
+    candidates.push(match[1]);
+  }
+
+  const hrefMatches = text.match(/https?:\/\/[^\s"'<>]+/gi) || [];
+  candidates.push(...hrefMatches);
+  if (/^https?:\/\//i.test(text)) candidates.push(text);
+
+  for (const rawCandidate of candidates) {
+    const candidate = decodeHtmlEntities(rawCandidate).replace(/[),.;]+$/, "");
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
+      if (isGoogleSpreadsheetUrl(candidate)) continue;
+      return candidate;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  return "";
+};
+
+const isRealOpportunityValue = (value) => {
+  const text = typeof value === "string" ? value.trim() : String(value ?? "").trim();
+  return Boolean(text) &&
+    !/^(see source|see official source|not available|n\/a|na|tba|date tba|unknown|—|-)$/i.test(text);
+};
+
+// Detail-sheet links from the CIT Competition Dashboard for the current live
+// competition set. These are used whenever the main sheet hides rich-text hrefs.
+const COMPETITION_DETAIL_SHEETS = {
+  openchallengeprogram30epdelhi: "https://docs.google.com/spreadsheets/d/1-UZlInmmHfNRrK2GEZPSeLqWK86Mp0U3BVy-t_p1ihk/edit?usp=sharing",
+  avinya27energystartupchallenge: "https://docs.google.com/spreadsheets/d/1hA9Zq49rdGdNXEomkWeLnbh0Z4KTFN3PmtcsMDiVgY8/edit?usp=sharing",
+  hppowerlab30: "https://docs.google.com/spreadsheets/d/1fLwcUKEqEVI4R5fZPJjHSONsH9mORKhviMdAAUieflo/edit?usp=sharing",
+  multimodalaihackathon2026: "https://docs.google.com/spreadsheets/d/1tQBs4NpwlYxcOhLPbH0CBp0USjBlTaC5fE3nmU64jjg/edit?usp=sharing",
+  sakthihackathon20: "https://docs.google.com/spreadsheets/d/1qEn4lnpNxlwsWV4ihckgQEi3Fh4YGBB2awiNcmIim_8/edit?usp=sharing",
+  ictacademyyouthtalk2026: "https://docs.google.com/spreadsheets/d/1xQ-bS366BHLr2oQVB9K57GsyJODAAR1TgU9M5L7ZyBc/edit?usp=sharing",
+  zephyrhackathon: "https://docs.google.com/spreadsheets/d/1Sl9QGGKYoFCQ8Pn1aPcPGF_Yt5VIYhaH3qfZCSp6Ie8/edit?usp=sharing",
+  atomquest2026: "https://docs.google.com/spreadsheets/d/16xr43at5dx_CWVwOxkTL-Y_pAR51IekamSgVCszo5TQ/edit?usp=sharing",
+  tataelxsiteliportseason4: "https://docs.google.com/spreadsheets/d/1BU53_Ud5ebRHal4EpbAuU5QkQayjyBVnHqILRT-2CJE/edit?usp=sharing",
+  ieeagetechglobaldatasetcompetition2026: "https://docs.google.com/spreadsheets/d/1UvNR02O748zm-K7fgSeMpspvLAXrf9QUkJUt4t4Kwr4/edit?usp=sharing",
+  gitaminnovationchallenge2026: "https://docs.google.com/spreadsheets/d/1whXOiMdgHX-302OuXPum2LNNqMdvKmE2os0MegZt-5s/edit?usp=sharing",
+  polarfirefpgadesigncontest: "https://docs.google.com/spreadsheets/d/1QvDdUjZkVzx5MahfHMXsgyl6c2AFuErlCmShbT17aQc/edit?usp=sharing",
+  northeasevafirstinnovationchallenge2026: "https://docs.google.com/spreadsheets/d/1wW3XlB-1s4SaZjOzdELuVxonSILJLKcupFYKG2rx5zs/edit?usp=sharing",
+  digitaltwinchallenge2026: "https://docs.google.com/spreadsheets/d/10EizG6wV8IrZGwZaLKuP4hypa0oe4z0nODZYCZW08BE/edit?usp=sharing",
+  wegeprize2027: "https://docs.google.com/spreadsheets/d/11PfwyFsS8tGH3hR49ARMqDiS2d3ZWM5BdpD61HKhCxg/edit?usp=sharing",
+  caddidc2026: "https://docs.google.com/spreadsheets/d/1T4xexpkS3dxYGUwPJpNDmzg1yGxB1uJjj8XAqcbmPn0/edit?usp=sharing",
+  ieeextreme200: "https://docs.google.com/spreadsheets/d/14tdoqhr7ZvL96a7UiDKkv9l12gKqNRQSdxtt3Zuo_4A/edit?usp=sharing",
+  nationalprobabilitychallenge: "https://docs.google.com/spreadsheets/d/1vr62Uanlc4VivD-A89S1scM3WsPnd1xGJuH3zWCbnSY/edit?usp=sharing",
+  chipthefuturechallenge: "https://docs.google.com/spreadsheets/d/1si2F9j9QryNhlHy1z0vow87I7Qh9eCitGnY9yrFf2uU/edit?usp=sharing",
+  amazondeveloperhackathon: "https://docs.google.com/spreadsheets/d/19QsrVvbij2Lq4d-AF6N-MibVpWp7of7PMgdK4uPyoAw/edit?usp=sharing",
+  ecocircuit: "https://docs.google.com/spreadsheets/d/1AaVxFKLmmHnjUPTwOb4d30uGvHFmQpHJebV1hXoCFDc/edit?usp=sharing",
+  galuxiumnexusv2: "https://docs.google.com/spreadsheets/d/140vQe8NU2aaY-CiEC3c_abb3wlne74TlwO8_ZifcY1M/edit?usp=sharing",
+  nebiusxnvidiaglobalaihackathon: "https://docs.google.com/spreadsheets/d/11LHX5NaE6ZarwZAhCVtNAaIRtaJ5so4zizkwK35WfJk/edit?usp=sharing",
+  nasaspaceappschallenge: "https://docs.google.com/spreadsheets/d/1dcXmsYmNAsyYSUdfGvkypcB5SU-VsUi8O7TxyXsu9wE/edit?usp=sharing",
+  hondainnovationchallenge20: "https://docs.google.com/spreadsheets/d/1D2IbOSqSbZ7GZdJwxXyxActC6EEIqcM0GE1pTX7-UbM/edit?usp=sharing",
+  ieeeclimatechainglobalhackathon: "https://docs.google.com/spreadsheets/d/19Ft-ArTcTRQt9lmfWV49CQ8DjGNyGwjG-0I7RlqH8eA/edit?usp=sharing",
+  gatewayhacks2026: "https://docs.google.com/spreadsheets/d/12ykNPytPpKBLbie2WPMOF7Mz4GXsCE91flCM7qi6nIs/edit?usp=sharing",
+  yuvayodhaenergytechhackathon: "https://docs.google.com/spreadsheets/d/1nCbIAHC9UAdhAcedHylvORtry4iaX-2Ho1Ezw8Zfy4E/edit?usp=sharing",
+  opencvaicompetition2026: "https://docs.google.com/spreadsheets/d/1YBfKmq6uxvsVW1fFfhcdJuRJLVNAib996Wvwz5GX8l0/edit?usp=sharing",
+};
+
+// Exact official competition/event URLs verified from current organizer pages.
+// Verified event sources. Generic organizer/company homepages are intentionally
+// excluded because they can lead to unrelated pages.
+const VERIFIED_OFFICIAL_COMPETITION_DATA = {
+  openchallengeprogram30epdelhi: {
+    url: "https://electropreneurpark.in/open_challenge",
+    overview: "Electropreneur Park's Open Challenge Program 3.0 is a Government of India-backed ESDM innovation program for startups and innovators. The program invites solutions to real-world electronics and hardware problems across areas including cognitive computing and social sensing, medtech, edutech, automotive electronics, strategic electronics, EV, defence and drones.",
+  },
+  avinya27energystartupchallenge: {
+    url: "https://innovateindia.mygov.in/avinya27-energy-startup-challenge/",
+    overview: "Avinya'27 is an energy startup competition under India Energy Week that asks startups, researchers and students to develop innovative solutions for the future energy sector. Official challenge themes include the hydrocarbon value chain, alternative fuels such as green hydrogen, low-carbon technologies, renewable energy, digital and AI/ML applications, energy efficiency and Industry 4.0.",
+  },
+  multimodalaihackathon2026: {
+    url: "https://multimodal-ai-hackathon-2026-7.devpost.com/",
+    overview: "The Multimodal AI Hackathon 2026 is a 15-day online build challenge focused on generative AI, agentic AI and real-world problem solving. The official event presents tracks spanning domains such as space, biotechnology and education, with projects submitted through Devpost.",
+  },
+  sakthihackathon20: {
+    url: "https://hackathon.drmcet.ac.in/",
+    overview: "Sakthi Hackathon 2.0 is a national inter-college hackathon organized by Dr. Mahalingam College of Engineering and Technology. The official event uses screening stages and culminates in an offline hackathon finale where participants develop solutions across technology domains.",
+  },
+  ictacademyyouthtalk2026: {
+    url: "https://youth.ictacademy.in/Talk2026/",
+    overview: "ICT Academy Youth Talk 2026 is a public-speaking competition designed to develop communication and leadership abilities among higher-education students. The official event describes progression from video screening through regional stages to a final speaking platform.",
+  },
+  zephyrhackathon: {
+    url: "https://beta.ptuniv.edu.in/",
+    overview: "ZEPHYR is presented by Puducherry Technological University as a national-level AI hackathon. The official university site describes an India-wide AI-focused challenge culminating in a grand-finale stage.",
+  },
+  ieeagetechglobaldatasetcompetition2026: {
+    url: "https://agetech.ieee.org/competition/",
+    overview: "The IEEE AgeTech Global Dataset Competition 2026 challenges participants to create and publish high-quality datasets supporting AI and healthy-longevity research. Official competition areas include health and well-being, independent living and smart environments, mobility and assistive technology, care and support, cognitive health and digital inclusion, and open innovation.",
+  },
+  gitaminnovationchallenge2026: {
+    url: "https://gevents.gitam.edu/event_details/ODkyMg..",
+    overview: "The GITAM Innovation Challenge 2026 is a national student innovation and pitching competition conducted through GITAM Venture Development Centre. The official event includes junior and main tracks and provides a platform for students to present innovative ideas and solutions before the final stages.",
+  },
+  atomquest2026: {
+    url: "https://gradpartners.in/",
+    overviewUrl: "https://www.linkedin.com/company/atomberg-technologies-private-limited/",
+    overview: "atomQUEST 2026 is an Atomberg Technologies engineering innovation challenge. The official organizer announcement describes three tracks—Fan, Water Purifier and Mixer Grinder—and asks engineering students to take an idea from an initial concept to a working prototype. It also states that teams can have 1 to 5 members and that selected participants can receive mentorship and placement-related opportunities.",
+  },
+  polarfirefpgadesigncontest: {
+    url: "https://www.microchip.com/en-us/campaigns/polarfire-fpga-design-contest",
+    overview: "The PolarFire FPGA Design Contest 2026 asks engineers, students and innovators to solve a real-world problem with hardware-accelerated solutions built on PolarFire and PolarFire SoC FPGA platforms. Microchip's official problem statement calls for RTL design, embedded processing and RISC-V-based methodologies, with tracks built around the Discovery, Icicle and Splash development platforms.",
+  },
+  digitaltwinchallenge2026: {
+    url: "https://unstop.com/hackathons/crp-digital-twin-challenge-2026-happiest-health-1757873",
+    overview: "The CRP Digital Twin Challenge 2026, associated with Happiest Health, focuses on developing a proof-of-concept healthcare Digital Twin. The challenge combines historical health information with dynamic wearable or IoT time-series data to model and predict localized health outcomes.",
+  },
+  wegeprize2027: {
+    url: "https://www.wegeprize.org/",
+    overview: "Wege Prize 2027 is a global university-student design competition and learning lab built around circular-economy thinking. Teams propose products or services that address complex real-world problems and evolve their ideas through an iterative design process with feedback from judges across multiple phases.",
+  },
+  caddidc2026: {
+    url: "https://caddcentre.com/international-design-competition-2026/",
+    overview: "The CADD Centre International Design Competition 2026 presents engineering design challenges covering industrial equipment, new energy for data centres, eVTOL and drones, and last-mile mobility. The official competition progresses through digital design and modelling, simulation and feasibility work, and an advanced final-stage presentation.",
+  },
+  ieeextreme200: {
+    url: "https://ieeextreme.org/",
+    overview: "IEEEXtreme 20.0 is a global 24-hour programming competition for teams of IEEE Student members working with an IEEE member as advisor and proctor. Participants solve competitive-programming problems during the official timed event.",
+  },
+  nationalprobabilitychallenge: {
+    url: "https://techfest.org/competitions",
+    overview: "The National Probability Challenge is listed in IIT Bombay Techfest's competition portal and focuses on probability, quantitative reasoning and decision-making. The official competition description uses problem-solving rounds and decision scenarios to test reasoning under uncertainty.",
+  },
+  chipthefuturechallenge: {
+    url: "https://semifoundation.org/chip-the-future-challenge/",
+    overview: "The Chip the Future Challenge is a global student competition from the SEMI Foundation focused on real-world semiconductor innovation. Students can enter a Research Challenge or Innovation Challenge covering chip design, semiconductor manufacturing, AI hardware, advanced packaging and breakthrough applications.",
+  },
+  amazondeveloperhackathon: {
+    url: "https://amazonappdev2026.devpost.com/",
+    overview: "The Amazon Developer Hackathon invites participants to build working applications across Amazon devices and services including Fire TV, Alexa+, Ring and Bee. The official event asks participants to choose a product track, create a functioning demo and submit project materials through Devpost.",
+  },
+  ecocircuit: {
+    url: "https://techfest.org/competitions/ecocircuit",
+    overview: "EcoCircuit is a Techfest sustainability-focused hardware challenge in which participants design electronic devices that can operate during use while also being designed for safer end-of-life degradation. The competition combines circuit and product engineering with an environmental design objective.",
+  },
+  galuxiumnexusv2: {
+    url: "https://galuxium-nexus-v2-29411.devpost.com/",
+    overview: "Galuxium Nexus V2 is a student-focused online hackathon centered on building SaaS products that solve real problems and can become products users would pay for. The official event encourages next-generation AI, creator and automation tools and expects a working project demonstration.",
+  },
+  nebiusxnvidiaglobalaihackathon: {
+    url: "https://nebiusglobalaihackathon.devpost.com/",
+    overview: "The Nebius x NVIDIA Global AI Hackathon invites developers to build AI projects using open infrastructure and accelerator-enabled tooling. The official event is organized around creating and submitting working AI solutions through Devpost under its published rules and schedule.",
+  },
+  nasaspaceappschallenge: {
+    url: "https://www.spaceappschallenge.org/2026/",
+    overview: "NASA's Space Apps Challenge 2026, themed \"The Next Frontier,\" invites teams to use open data from NASA and international space-agency partners to address Earth and space challenges. Participants form teams, build a project around a published challenge and submit their solution during the official event.",
+  },
+  hondainnovationchallenge20: {
+    url: "https://www.t-hub.co/honda-innovation-challenge-2-0",
+    overview: "Honda Innovation Challenge 2.0 is a startup co-development program presented by T-Hub and Honda. The official challenge focuses on improving customer safety, loyalty and experience, including areas related to women mobility and everyday mobility, with selected startups progressing toward proof-of-concept or pilot collaboration.",
+  },
+  ieeeclimatechainglobalhackathon: {
+    url: "https://ieee-climatechain-hack.devpost.com/",
+    overview: "The IEEE ClimateChain Global Hackathon combines AI and blockchain to address climate-related problems. Official focus areas include transparent carbon markets, renewable energy, sustainable supply chains and climate data, with participants building and submitting practical technology prototypes.",
+  },
+  gatewayhacks2026: {
+    url: "https://gatewayhacks-2026.devpost.com/",
+    overview: "GatewayHacks 2026 is a four-week virtual hackathon where participants can build software, hardware or AI prototypes for social good. The official event includes themes such as accessibility and health, equity in education and open-impact projects, with projects submitted online.",
+  },
+  yuvayodhaenergytechhackathon: {
+    url: "https://www.yuvayodhatech.com/",
+    overview: "Yuva Yodha Energy Tech Hackathon is a Schneider Electric energy and sustainability challenge. Its official challenge statements address sustainable agriculture, smart buildings, grid reliability and renewable-energy intermittency, and smart manufacturing.",
+  },
+  opencvaicompetition2026: {
+    url: "https://opencv.org/opencv-ai-competition-2026",
+    overview: "The OpenCV AI Competition 2026 is a global computer-vision challenge run by OpenCV in collaboration with AWS. The official competition highlights OpenCV 5, computer vision, Physical AI, generative AI, agentic vision and cloud deployment.",
+  },
+};
+
+const getKnownCompetitionUrl = (item) => {
+  const key = normalizeCompetitionKey(item?.name || item?.sourceName);
+  return normalizeOfficialUrl(VERIFIED_OFFICIAL_COMPETITION_DATA[key]?.url || "");
+};
+
+const getKnownCompetitionOverview = (item) => {
+  const key = normalizeCompetitionKey(item?.name || item?.sourceName);
+  return normalizeSheetText(VERIFIED_OFFICIAL_COMPETITION_DATA[key]?.overview || "");
+};
+
+const getKnownCompetitionOverviewSource = (item) => {
+  const key = normalizeCompetitionKey(item?.name || item?.sourceName);
+  return normalizeOfficialUrl(
+    VERIFIED_OFFICIAL_COMPETITION_DATA[key]?.overviewUrl ||
+      VERIFIED_OFFICIAL_COMPETITION_DATA[key]?.url ||
+      ""
+  );
+};
+
+const getCompetitionDetailSheetFallback = (item) => {
+  const key = normalizeCompetitionKey(item?.name || item?.sourceName);
+  return COMPETITION_DETAIL_SHEETS[key] || "";
+};
+
+const competitionDetailCache = new globalThis.Map();
+
+const getSpreadsheetIdFromUrl = (value) => {
+  if (typeof value !== "string") return "";
+  const match = value.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  return match?.[1] || "";
+};
+
+const parseGvizHtmlRows = (html) => {
+  if (typeof DOMParser === "undefined" || typeof html !== "string") return [];
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  const table =
+    parsed.querySelector("table.google-visualization-table-table") ||
+    parsed.querySelector("table");
+  if (!table) return [];
+
+  return Array.from(table.querySelectorAll("tr")).map((tr) =>
+    Array.from(tr.querySelectorAll("th,td")).map((cell) => ({
+      text: cleanDetailText(cell.textContent),
+      links: Array.from(cell.querySelectorAll("a[href]"))
+        .map((anchor) => decodeHtmlEntities(anchor.getAttribute("href") || ""))
+        .filter(Boolean),
+      html: cell.innerHTML || "",
+    }))
+  );
+};
+
+const fetchGvizHtml = async (spreadsheetId, sheetName = "") => {
+  const params = new URLSearchParams({ tqx: "out:html" });
+  if (sheetName) params.set("sheet", sheetName);
+  const endpoint =
+    `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?${params.toString()}`;
+  const response = await fetch(endpoint, {
+    method: "GET",
+    cache: "no-store",
+    credentials: "omit",
+  });
+  if (!response.ok) throw new Error(`GOOGLE_SHEET_HTML_HTTP_${response.status}`);
+  return response.text();
+};
+
+const fetchGvizJson = async (spreadsheetId, sheetName = "") => {
+  const params = new URLSearchParams({ tqx: "out:json" });
+  if (sheetName) params.set("sheet", sheetName);
+  const endpoint =
+    `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?${params.toString()}`;
+  const response = await fetch(endpoint, {
+    method: "GET",
+    cache: "no-store",
+    credentials: "omit",
+  });
+  if (!response.ok) throw new Error(`GOOGLE_SHEET_JSON_HTTP_${response.status}`);
+  return response.text();
+};
+
+const cleanDetailText = (value) =>
+  normalizeSheetText(value)
+    .replace(/^[-–—•]+\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const extractUrlsFromCell = (cell) => {
+  if (!cell) return [];
+  return [...new Set(
+    [cell.text, cell.html, ...(cell.links || [])]
+      .filter((value) => typeof value === "string")
+      .flatMap((value) => {
+        const values = [value, ...(value.match(/https?:\/\/[^\s"'<>]+/gi) || [])];
+        return values.map(normalizeOfficialUrl).filter(Boolean);
+      })
+  )];
+};
+
+const fetchCompetitionDetailData = async (detailSheetUrl) => {
+  if (!detailSheetUrl) return {};
+  if (competitionDetailCache.has(detailSheetUrl)) {
+    return competitionDetailCache.get(detailSheetUrl);
+  }
+
+  const spreadsheetId = getSpreadsheetIdFromUrl(detailSheetUrl);
+  if (!spreadsheetId) return {};
+
+  try {
+    let htmlRows = [];
+    try {
+      const html = await fetchGvizHtml(spreadsheetId);
+      htmlRows = parseGvizHtmlRows(html);
+    } catch (htmlError) {
+      console.warn("DETAIL SHEET HTML LOAD FAILED:", htmlError);
+    }
+
+    const jsonUrls = [];
+    try {
+      const jsonText = await fetchGvizJson(spreadsheetId);
+      const start = jsonText.indexOf("{");
+      const end = jsonText.lastIndexOf("}");
+      if (start >= 0 && end > start) {
+        const payload = JSON.parse(jsonText.slice(start, end + 1));
+        (payload?.table?.rows || []).forEach((row) => {
+          (row?.c || []).forEach((cell) => {
+            [cell?.v, cell?.f, cell?.html]
+              .filter((value) => value !== undefined && value !== null)
+              .forEach((value) => {
+                const normalized = normalizeOfficialUrl(String(value));
+                if (normalized) jsonUrls.push(normalized);
+              });
+          });
+        });
+      }
+    } catch (jsonError) {
+      console.warn("DETAIL SHEET JSON LOAD FAILED:", jsonError);
+    }
+
+    const rowTexts = htmlRows.map((row) =>
+      row.map((cell) => cleanDetailText(cell.text)).filter(Boolean)
+    );
+
+    const preferredRowIndices = rowTexts.reduce((indices, cells, index) => {
+      if (cells.some((text) =>
+        /event website|official website|registration link|website & registration|website url|official url/i.test(text)
+      )) {
+        indices.push(index);
+      }
+      return indices;
+    }, []);
+
+    const preferredUrls = preferredRowIndices.flatMap((index) =>
+      (htmlRows[index] || []).flatMap(extractUrlsFromCell)
+    );
+    const allHtmlUrls = htmlRows.flatMap((row) => row.flatMap(extractUrlsFromCell));
+
+    const officialUrl =
+      [...preferredUrls, ...jsonUrls, ...allHtmlUrls]
+        .map(normalizeOfficialUrl)
+        .find(Boolean) || "";
+
+    let teamSize = "";
+    for (const cells of rowTexts) {
+      for (let i = 0; i < cells.length; i += 1) {
+        if (!/^(team size|team size \/ team registration|registration team|reg\.\s*team)/i.test(cells[i])) continue;
+        const inline = cleanDetailText(
+          cells[i].replace(/^(team size|team size \/ team registration|registration team|reg\.\s*team)\s*[:：-]?\s*/i, "")
+        );
+        if (isRealOpportunityValue(inline)) {
+          teamSize = inline;
+          break;
+        }
+        const adjacent = cells.slice(i + 1).find(isRealOpportunityValue);
+        if (adjacent) {
+          teamSize = adjacent;
+          break;
+        }
+      }
+      if (teamSize) break;
+    }
+
+    const result = {
+      officialUrl,
+      teamSize,
+      detailSheetUrl,
+      detailOverview: "",
+      detailThemes: [],
+    };
+
+    competitionDetailCache.set(detailSheetUrl, result);
+    return result;
+  } catch (error) {
+    console.warn("Could not read competition detail sheet:", error);
+    return {};
+  }
+};
+
+const resolveCompetitionOfficialUrl = async (competition) => {
+  if (!competition) return "";
+
+  const direct = getOpportunityOfficialUrl(competition);
+  if (direct) return direct;
+
+  // Re-read only the public competition dashboard at click time.
+  try {
+    const mainJson = await fetchGvizJson(COMPETITION_SHEET_ID, COMPETITION_SHEET_NAME);
+    const mainRows = parseGoogleVisualizationResponse(mainJson);
+    const target = normalizeCompetitionKey(competition.name);
+    const mainRow = mainRows.find((row) => normalizeCompetitionKey(row.sourceName) === target);
+
+    const mainUrl = normalizeOfficialUrl(mainRow?.officialUrl);
+    if (mainUrl) return mainUrl;
+
+    for (const url of mainRow?.externalLinks || []) {
+      if (!isGoogleSpreadsheetUrl(url)) {
+        const normalized = normalizeOfficialUrl(url);
+        if (normalized) return normalized;
+      }
+    }
+  } catch (error) {
+    console.warn("PUBLIC MAIN SHEET OFFICIAL URL LOOKUP FAILED:", error);
+  }
+
+  return getKnownCompetitionUrl(competition);
+};
+
+const getMainSheetOfficialUrl = (item) => {
+  if (!item) return "";
+
+  const preferredFieldPattern = /registration|official|event\s*website|website|external|url|link/i;
+  const rawCells = item.rawCells || {};
+
+  for (const [label, cell] of Object.entries(rawCells)) {
+    if (!preferredFieldPattern.test(label)) continue;
+
+    for (const value of [cell?.html, cell?.formula, cell?.value]) {
+      const normalized = normalizeOfficialUrl(String(value ?? ""));
+      if (normalized) return normalized;
+    }
+  }
+
+  // The parser also keeps external links discovered in row cells. Only use
+  // these after trying label-specific fields, and never use a Google Sheet URL.
+  const external = (item.externalLinks || [])
+    .filter((url) => !isGoogleSpreadsheetUrl(url))
+    .map(normalizeOfficialUrl)
+    .find(Boolean);
+
+  return external || "";
+};
+
+const getOpportunityOfficialUrl = (item) => {
+  if (!item) return "";
+
+  const direct = [
+    item.officialUrl,
+    item.registrationUrl,
+    item.registrationLink,
+    item.formUrl,
+    item.websiteUrl,
+    item.website,
+    item.externalUrl,
+    item.link,
+    item.url,
+  ].map(normalizeOfficialUrl).find(Boolean);
+
+  return direct || getMainSheetOfficialUrl(item) || getKnownCompetitionUrl(item);
+};
+
+const enrichCompetitionLinks = (competitions) =>
+  competitions.map((competition) => {
+    const officialUrl =
+      normalizeOfficialUrl(competition.officialUrl) ||
+      getMainSheetOfficialUrl(competition) ||
+      getKnownCompetitionUrl(competition);
+    const sheetOverview = normalizeSheetText(competition.challengeOverview);
+    const staticOverview = getKnownCompetitionOverview(competition);
+
+    return {
+      ...competition,
+      officialUrl,
+      detailOfficialUrl: officialUrl,
+      // Kept for compatibility; never fetched from the browser.
+      detailSheetUrl: competition.detailSheetUrl || "",
+      detailDashboardUrl: competition.detailDashboardUrl || "",
+      dashboardUrl: competition.dashboardUrl,
+      sourceUrl: competition.sourceUrl,
+      teamSize: isRealOpportunityValue(competition.teamSize) ? competition.teamSize : "",
+      detailOverview: sheetOverview || staticOverview,
+      overviewSourceUrl: sheetOverview
+        ? COMPETITION_SHEET_URL
+        : getKnownCompetitionOverviewSource(competition),
+      overviewSourceLabel: sheetOverview
+        ? "CIT Competition Dashboard"
+        : getKnownCompetitionOverviewSource(competition)
+        ? (VERIFIED_OFFICIAL_COMPETITION_DATA[normalizeCompetitionKey(competition?.name || competition?.sourceName)]?.overviewUrl
+            ? "Official organizer source"
+            : "Official event source")
+        : "",
+      detailThemes: competition.detailThemes || [],
+    };
+  });
+
+const DETAIL_TILE_STYLE = {
+  minHeight: "74px",
+  height: "auto",
+  padding: "12px 10px",
+  borderRadius: "12px",
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "center",
+  alignItems: "center",
+  textAlign: "center",
+  overflow: "visible",
+  boxSizing: "border-box",
+};
+
+const DETAIL_TILE_LABEL_STYLE = {
+  display: "block",
+  fontSize: "9px",
+  lineHeight: 1.25,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const DETAIL_TILE_VALUE_STYLE = {
+  display: "block",
+  width: "100%",
+  maxWidth: "100%",
+  marginTop: "6px",
+  fontSize: "12px",
+  lineHeight: 1.35,
+  fontWeight: 700,
+  whiteSpace: "normal",
+  overflow: "visible",
+  textOverflow: "clip",
+  overflowWrap: "anywhere",
+  wordBreak: "break-word",
+};
+
+const getOpportunityDashboardUrl = (item) => {
+  if (!item) return COMPETITION_SHEET_URL;
+  if (item.dashboardUrl) return item.dashboardUrl;
+  if (item.dataSource === "google_sheet_live" && item.sourceRow) {
+    return `${COMPETITION_SHEET_URL}#range=B${item.sourceRow}`;
+  }
+  return item.sourceUrl || COMPETITION_SHEET_URL;
+};
+
+const parseGoogleVisualizationResponse = (text) => {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) {
+    throw new Error("GOOGLE_SHEET_INVALID_RESPONSE");
+  }
+
+  const payload = JSON.parse(text.slice(start, end + 1));
+  const table = payload?.table;
+  if (!table?.rows || !Array.isArray(table.rows)) {
+    throw new Error("GOOGLE_SHEET_NO_ROWS");
+  }
+
+  const labels = (table.cols || []).map((column) => normalizeSheetText(column?.label));
+
+  return table.rows.map((row, rowIndex) => {
+    const values = row?.c || [];
+    const record = {};
+    const rawCells = {};
+
+    labels.forEach((label, index) => {
+      if (!label) return;
+      const cell = values[index] || {};
+      record[label] = cell.v ?? "";
+      rawCells[label] = {
+        value: cell.v ?? "",
+        formula: cell.f ?? "",
+        html: cell.html ?? "",
+      };
+    });
+
+    const findFirstField = (candidates) => {
+      const key = candidates.find((candidate) =>
+        Object.prototype.hasOwnProperty.call(record, candidate)
+      );
+      return key ? record[key] : "";
+    };
+
+    const externalLinks = [];
+    const spreadsheetLinks = [];
+    Object.values(rawCells).forEach((cell) => {
+      [cell.value, cell.formula, cell.html].forEach((source) => {
+        if (typeof source !== "string") return;
+        const urls = source.match(/https?:\/\/[^\s"'<>]+/gi) || [];
+        urls.forEach((url) => {
+          const cleaned = url.replace(/[),.;]+$/, "");
+          if (isGoogleSpreadsheetUrl(cleaned)) spreadsheetLinks.push(cleaned);
+          else externalLinks.push(cleaned);
+        });
+        const normalized = normalizeOfficialUrl(source);
+        if (normalized) externalLinks.push(normalized);
+      });
+    });
+
+    return {
+      sourceRow: rowIndex + 3,
+      sourceName: normalizeSheetText(findFirstField(["Competition Name", "Hackathon Name", "Event Name", "Name"])),
+      sourceStatus: normalizeSheetText(findFirstField(["Competition Status", "Status", "Registration Status"])),
+      eligibleYear: normalizeSheetText(findFirstField(["Eligible Year", "Eligibility Year", "Eligible Years", "Year"])),
+      registrationDeadline: findFirstField(["Reg. Deadline", "Registration Deadline", "Deadline", "Reg Deadline"]),
+      round1Date: findFirstField(["R1 -Date", "R1 Date", "Round 1", "Round 1 Date"]),
+      round2Date: findFirstField(["R2 - Date", "R2 Date", "Round 2", "Round 2 Date"]),
+      competitionDate: findFirstField(["Competition Date", "Final Date", "Event Date"]),
+      registrationTeam: findFirstField(["Reg. Team", "Registration Team"]),
+      teamSize: findFirstField(["Team Size", "Team Size / Team Registration"]),
+      registrationStudents: findFirstField(["Reg. Std", "Registration Students", "Registered Students"]),
+      prizeAmount: normalizeSheetText(findFirstField(["Total Prize Amount", "Prize", "Prize Amount"])),
+      category: normalizeSheetText(findFirstField(["Category", "Competition Category", "Type"])),
+      organizer: normalizeSheetText(findFirstField(["Organizer", "Organiser", "Organizing Body"])),
+      department: normalizeSheetText(findFirstField(["Department", "Eligible Department", "Branch", "Dept"])),
+      challengeOverview: normalizeSheetText(findFirstField([
+        "Challenge Overview",
+        "Project Overview",
+        "Challenge Description",
+        "Overview",
+        "Description",
+      ])),
+      officialUrl: normalizeSheetText(findFirstField([
+        "Registration Link", "Registration URL", "Form Link", "Form URL",
+        "Official Link", "Official URL", "Official Website", "Event Website",
+        "Event Website URL", "Event Website & Registration Link", "Website & Registration",
+        "Website", "Website URL",
+      ])),
+      sourceFields: record,
+      rawCells,
+      externalLinks: [...new Set(externalLinks.map(normalizeOfficialUrl).filter(Boolean))],
+      spreadsheetLinks: [...new Set(spreadsheetLinks.filter(Boolean))],
+    };
+  });
+};
+
+const fetchLiveCompetitionDashboard = async () => {
+  const params = new URLSearchParams({
+    tqx: "out:json",
+    sheet: COMPETITION_SHEET_NAME,
+  });
+
+  const endpoint =
+    `https://docs.google.com/spreadsheets/d/${COMPETITION_SHEET_ID}/gviz/tq?${params.toString()}`;
+
+  const response = await fetch(endpoint, {
+    method: "GET",
+    cache: "no-store",
+    credentials: "omit",
+  });
+
+  if (!response.ok) {
+    throw new Error(`GOOGLE_SHEET_HTTP_${response.status}`);
+  }
+
+  const text = await response.text();
+  const rawRows = parseGoogleVisualizationResponse(text);
+
+  const competitions = rawRows
+    .filter((row) => row.sourceName)
+    .map((row) => {
+      const deadline = parseSheetDate(row.registrationDeadline);
+      const sourceId = `sheet_${row.sourceRow}_${row.sourceName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_|_$/g, "")}`;
+
+      const activeForRegistration = isRegistrationActive(row);
+      const knownDetailSheet = getCompetitionDetailSheetFallback({ name: row.sourceName });
+
+      return {
+        id: sourceId,
+        name: row.sourceName,
+        description:
+          `${row.category || "Competition"} organized by ${row.organizer || "the listed organizer"}. ` +
+          `Eligible: ${row.eligibleYear || "Eligibility details available in the official source."}`,
+        icon: "rocket",
+        date: formatOpportunityDate(deadline),
+        registrationDeadline: deadline,
+        sourceStatus: row.sourceStatus,
+        eligibleYear: row.eligibleYear,
+        category: row.category,
+        organizer: row.organizer,
+        department: row.department,
+        challengeOverview: row.challengeOverview,
+        officialUrl: normalizeOfficialUrl(row.officialUrl) || getKnownCompetitionUrl(row),
+        registrationTeam: row.registrationTeam,
+        teamSize: isRealOpportunityValue(row.teamSize) ? row.teamSize : "",
+        registrationStudents: row.registrationStudents,
+        prizeAmount: row.prizeAmount,
+        round1Date: row.round1Date,
+        round2Date: row.round2Date,
+        competitionDate: row.competitionDate,
+        daysRemaining: getCompetitionDaysRemaining(row),
+        activeForRegistration,
+        sourceRow: row.sourceRow,
+        dashboardUrl: `${COMPETITION_SHEET_URL}#range=B${row.sourceRow}`,
+        sourceUrl: `${COMPETITION_SHEET_URL}#range=B${row.sourceRow}`,
+        sourceLabel: "CIT Competition Dashboard",
+        dataSource: "google_sheet_live",
+        sourceFields: row.sourceFields,
+        rawCells: row.rawCells,
+        externalLinks: row.externalLinks,
+        spreadsheetLinks: row.spreadsheetLinks,
+        detailSheetUrl: knownDetailSheet,
+        detailDashboardUrl: knownDetailSheet,
+      };
+    })
+    .filter((competition) => competition.activeForRegistration);
+
+  return enrichCompetitionLinks(competitions);
+};
+
+const fetchAllCompetitionDashboard = async () => {
+  const text = await fetchGvizJson(COMPETITION_SHEET_ID, COMPETITION_SHEET_NAME);
+  const rawRows = parseGoogleVisualizationResponse(text);
+
+  const competitions = rawRows
+    .filter((row) => row.sourceName)
+    .map((row) => {
+      const deadline = parseSheetDate(row.registrationDeadline);
+      const sourceId = `sheet_${row.sourceRow}_${row.sourceName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_|_$/g, "")}`;
+      const activeForRegistration = isRegistrationActive(row);
+      const knownDetailSheet = getCompetitionDetailSheetFallback({ name: row.sourceName });
+
+      return {
+        id: sourceId,
+        name: row.sourceName,
+        description:
+          `${row.category || "Competition"} organized by ${row.organizer || "the listed organizer"}. ` +
+          `Eligible: ${row.eligibleYear || "Eligibility details available in the official source."}`,
+        icon: "rocket",
+        date: formatOpportunityDate(deadline),
+        registrationDeadline: deadline,
+        sourceStatus: row.sourceStatus,
+        eligibleYear: row.eligibleYear,
+        category: row.category,
+        organizer: row.organizer,
+        department: row.department,
+        challengeOverview: row.challengeOverview,
+        officialUrl: normalizeOfficialUrl(row.officialUrl),
+        registrationTeam: row.registrationTeam,
+        teamSize: isRealOpportunityValue(row.teamSize) ? row.teamSize : "",
+        registrationStudents: row.registrationStudents,
+        prizeAmount: row.prizeAmount,
+        round1Date: row.round1Date,
+        round2Date: row.round2Date,
+        competitionDate: row.competitionDate,
+        daysRemaining: getCompetitionDaysRemaining(row),
+        activeForRegistration,
+        statusLabel: activeForRegistration ? "Registration Open" : "Registration Closed",
+        sourceRow: row.sourceRow,
+        dashboardUrl: `${COMPETITION_SHEET_URL}#range=B${row.sourceRow}`,
+        sourceUrl: `${COMPETITION_SHEET_URL}#range=B${row.sourceRow}`,
+        sourceLabel: "CIT Competition Dashboard",
+        dataSource: "google_sheet_live",
+        sourceFields: row.sourceFields,
+        rawCells: row.rawCells,
+        externalLinks: row.externalLinks,
+        spreadsheetLinks: row.spreadsheetLinks,
+        detailSheetUrl: knownDetailSheet,
+        detailDashboardUrl: knownDetailSheet,
+      };
+    });
+
+  return enrichCompetitionLinks(competitions);
+};
+
+
+const COMPETITION_FINAL_POLISH_CSS = `
+/* =========================================================
+   CAMPUSCONNECT — COMPETITIONS FINAL UI POLISH
+   Scoped to #hackathons and the competition details modal.
+   ========================================================= */
+
+#hackathons {
+  position: relative;
+  overflow: hidden;
+  border-radius: 24px;
+  border: 1px solid rgba(124, 92, 255, 0.34);
+  background:
+    radial-gradient(circle at 14% 0%, rgba(124, 92, 255, 0.20), transparent 34%),
+    radial-gradient(circle at 92% 15%, rgba(62, 144, 255, 0.14), transparent 32%),
+    linear-gradient(180deg, rgba(28, 24, 79, 0.96), rgba(10, 14, 38, 0.98));
+  box-shadow:
+    0 28px 70px rgba(4, 7, 20, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+#hackathons::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(120deg, rgba(255,255,255,0.03), transparent 35%, rgba(123,92,255,0.025));
+}
+
+#hackathons > * {
+  position: relative;
+  z-index: 1;
+}
+
+#hackathons .section-heading {
+  padding-bottom: 18px;
+}
+
+#hackathons .section-heading h2 {
+  margin: 6px 0 8px;
+  font-size: clamp(26px, 2.2vw, 36px);
+  letter-spacing: -0.035em;
+}
+
+#hackathons .section-heading p {
+  max-width: 760px;
+  margin: 0 auto;
+  color: rgba(226, 229, 245, 0.66);
+  line-height: 1.65;
+}
+
+#hackathons .opportunity-toolbar {
+  gap: 12px;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.07);
+  background: rgba(7, 11, 32, 0.56);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.035);
+}
+
+#hackathons .opportunity-search {
+  min-height: 46px;
+  border-radius: 13px;
+  border: 1px solid rgba(133, 112, 255, 0.20);
+  background: rgba(4, 8, 28, 0.64);
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+
+#hackathons .opportunity-search:focus-within {
+  border-color: rgba(138, 111, 255, 0.62);
+  box-shadow: 0 0 0 4px rgba(124, 92, 255, 0.10);
+  transform: translateY(-1px);
+}
+
+#hackathons .opportunity-search input {
+  font-size: 13px;
+}
+
+#hackathons .styled-select {
+  min-height: 46px;
+}
+
+#hackathons .styled-select-trigger {
+  min-height: 46px;
+  border-radius: 13px;
+  border: 1px solid rgba(133, 112, 255, 0.18);
+  background: rgba(4, 8, 28, 0.64);
+}
+
+#hackathons .opportunity-summary {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 15px;
+  border: 1px solid rgba(255,255,255,0.065);
+  background: rgba(255,255,255,0.026);
+}
+
+#hackathons .opportunity-summary strong {
+  font-size: 18px;
+}
+
+#hackathons .opportunity-summary a {
+  font-weight: 700;
+  transition: opacity .18s ease, transform .18s ease;
+}
+
+#hackathons .opportunity-summary a:hover {
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
+#hackathons .opportunity-closing-soon {
+  margin-top: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 197, 92, 0.16);
+  background: linear-gradient(180deg, rgba(255,196,92,0.055), rgba(255,255,255,0.018));
+}
+
+#hackathons .event-grid {
+  gap: 16px;
+  margin-top: 18px;
+}
+
+#hackathons .event-card {
+  position: relative;
+  min-width: 0;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(137, 122, 255, 0.16);
+  background:
+    linear-gradient(180deg, rgba(21, 27, 65, 0.94), rgba(11, 16, 42, 0.96));
+  box-shadow:
+    0 12px 30px rgba(4, 7, 20, 0.20),
+    inset 0 1px 0 rgba(255,255,255,0.035);
+  transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+}
+
+#hackathons .event-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(138, 111, 255, 0.38);
+  box-shadow:
+    0 18px 38px rgba(4, 7, 20, 0.28),
+    0 0 0 1px rgba(124,92,255,0.05) inset;
+}
+
+#hackathons .event-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  background: linear-gradient(135deg, rgba(124,92,255,0.28), rgba(65,129,255,0.18));
+  border: 1px solid rgba(145,126,255,0.18);
+}
+
+#hackathons .event-date {
+  display: inline-flex;
+  margin-top: 3px;
+  margin-bottom: 7px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(168, 151, 255, 0.96);
+}
+
+#hackathons .event-card h3 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.35;
+  letter-spacing: -0.018em;
+}
+
+#hackathons .event-card > div:last-of-type > p,
+#hackathons .event-card p {
+  color: rgba(222, 226, 244, 0.66);
+  line-height: 1.55;
+}
+
+#hackathons .opportunity-card-meta span {
+  border-radius: 999px;
+  border: 1px solid rgba(132, 113, 255, 0.16);
+  background: rgba(124, 92, 255, 0.075);
+  padding: 5px 8px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+#hackathons .opportunity-card-deadline {
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  color: rgba(233,236,250,0.66);
+}
+
+#hackathons .event-card-actions button {
+  border-radius: 11px;
+  font-weight: 800;
+  border: 1px solid rgba(138,111,255,0.22);
+  background: rgba(124,92,255,0.10);
+  transition: background .18s ease, border-color .18s ease, transform .18s ease;
+}
+
+#hackathons .event-card-actions button:hover {
+  background: rgba(124,92,255,0.18);
+  border-color: rgba(138,111,255,0.42);
+  transform: translateY(-1px);
+}
+
+/* ---------------- Competition detail modal ---------------- */
+.competition-modal-overlay {
+  padding: 46px 20px;
+  box-sizing: border-box;
+}
+
+.competition-modal-overlay .hackathon-competition-modal {
+  width: min(760px, calc(100vw - 40px));
+  max-height: min(84vh, 820px);
+  margin: 0 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border-radius: 22px;
+  border: 1px solid rgba(136, 110, 255, 0.46);
+  background:
+    radial-gradient(circle at 88% 4%, rgba(102, 93, 255, 0.11), transparent 26%),
+    linear-gradient(180deg, rgba(11, 17, 43, 0.99), rgba(8, 13, 34, 0.99));
+  box-shadow:
+    0 35px 90px rgba(0,0,0,0.48),
+    0 0 0 1px rgba(255,255,255,0.022) inset;
+}
+
+.competition-modal-overlay .hackathon-competition-modal::-webkit-scrollbar {
+  width: 9px;
+}
+
+.competition-modal-overlay .hackathon-competition-modal::-webkit-scrollbar-track {
+  background: rgba(255,255,255,0.025);
+  border-radius: 999px;
+}
+
+.competition-modal-overlay .hackathon-competition-modal::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(139, 119, 255, 0.38);
+  border: 2px solid rgba(8,13,34,0.94);
+}
+
+.competition-modal-overlay .hackathon-competition-modal::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 119, 255, 0.56);
+}
+
+.competition-modal-overlay .opportunity-overview {
+  margin-top: 18px;
+  padding: 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(132, 113, 255, 0.15);
+  background: linear-gradient(180deg, rgba(18,24,53,0.90), rgba(13,19,45,0.92));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.026);
+}
+
+.competition-modal-overlay .opportunity-overview p {
+  margin: 10px 0 0;
+  color: rgba(235,237,248,0.82);
+  font-size: 14px;
+  line-height: 1.68;
+}
+
+.competition-modal-overlay .opportunity-overview a {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 12px;
+  font-size: 11px !important;
+}
+
+.competition-modal-overlay .opportunity-detail-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.competition-modal-overlay .opportunity-detail-grid > div {
+  min-width: 0;
+  min-height: 78px;
+  padding: 13px 11px;
+  border-radius: 14px;
+  border: 1px solid rgba(132,113,255,0.13);
+  background: rgba(18,24,52,0.76);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.022);
+}
+
+.competition-modal-overlay .opportunity-detail-grid > div:hover {
+  border-color: rgba(138,111,255,0.23);
+  background: rgba(21,27,61,0.82);
+}
+
+.competition-modal-overlay .opportunity-detail-grid strong {
+  width: 100%;
+  color: rgba(245,246,252,0.95);
+  font-size: 12px;
+  line-height: 1.42;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.competition-modal-overlay .opportunity-themes {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255,255,255,0.055);
+}
+
+.competition-modal-overlay .opportunity-themes ul {
+  margin: 9px 0 0;
+  padding-left: 18px;
+}
+
+.competition-modal-overlay .opportunity-themes li {
+  margin: 5px 0;
+  color: rgba(230,233,248,0.74);
+  line-height: 1.5;
+}
+
+.competition-modal-overlay .hackathon-modal-actions {
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding-top: 4px;
+}
+
+.competition-modal-overlay .hackathon-modal-actions .primary-button,
+.competition-modal-overlay .hackathon-modal-actions .secondary-button {
+  min-height: 42px;
+  border-radius: 12px;
+}
+
+@media (max-width: 760px) {
+  .competition-modal-overlay {
+    padding: 34px 12px;
+  }
+
+  .competition-modal-overlay .hackathon-competition-modal {
+    width: min(100%, calc(100vw - 24px));
+    max-height: 86vh;
+    border-radius: 19px;
+  }
+
+  .competition-modal-overlay .opportunity-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #hackathons .event-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .competition-modal-overlay .opportunity-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .competition-modal-overlay .opportunity-overview p {
+    font-size: 13px;
+  }
+}
+/* =========================================================
+   COMPETITION BATCH CONTROL
+========================================================= */
+
+#hackathons .opportunity-show-more-wrap {
+  margin-top: 16px;
+  gap: 10px;
+}
+
+#hackathons .opportunity-show-more-wrap .secondary-button {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 9px;
+}
+
+/* =========================================================
+   MOBILE LAYOUT + TEAM CARD SAFETY
+   Desktop/laptop layout remains unchanged.
+========================================================= */
+
+@media (max-width: 760px) {
+  html,
+  body,
+  #root {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+  }
+
+  .app-shell {
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .sidebar {
+    width: 56px !important;
+    min-width: 56px !important;
+    box-sizing: border-box;
+  }
+
+  .main-content {
+    width: calc(100% - 56px) !important;
+    max-width: calc(100% - 56px) !important;
+    margin-left: 56px !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
+    overflow-x: hidden;
+  }
+
+  .topbar {
+    width: 100% !important;
+    box-sizing: border-box;
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+  }
+
+  .dashboard {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 14px 8px 32px !important;
+    box-sizing: border-box;
+  }
+
+  .dashboard-hero,
+  #hackathons,
+  .events-subsection,
+  .messages-section,
+  .resources-section,
+  .teams-section,
+  .teams-create-section,
+  .create-team-card,
+  .lower-section {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    box-sizing: border-box;
+  }
+
+  .dashboard-hero {
+    padding-left: 14px !important;
+    padding-right: 14px !important;
+  }
+
+  .stats-grid {
+    width: 100% !important;
+    min-width: 0 !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  #hackathons .event-grid {
+    width: 100% !important;
+    min-width: 0 !important;
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+
+  #hackathons .event-card {
+    width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+
+  .opportunity-toolbar {
+    width: 100% !important;
+    grid-template-columns: 1fr !important;
+  }
+
+  .opportunity-filters {
+    width: 100% !important;
+    grid-template-columns: 1fr !important;
+  }
+
+  .opportunity-search,
+  .opportunity-filters select {
+    width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+
+  .opportunity-detail-grid {
+    width: 100% !important;
+    min-width: 0 !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  .opportunity-detail-grid > div {
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+
+  .team-modern-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+  }
+
+  .team-card-main {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .team-card-actions {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  .team-card-actions > div {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 8px !important;
+    box-sizing: border-box !important;
+  }
+
+  .team-card-actions button {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+    margin: 0 !important;
+  }
+
+  #hackathons .opportunity-show-more-wrap {
+    width: 100%;
+    box-sizing: border-box;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 480px) {
+  .sidebar {
+    width: 52px !important;
+    min-width: 52px !important;
+  }
+
+  .main-content {
+    width: calc(100% - 52px) !important;
+    max-width: calc(100% - 52px) !important;
+    margin-left: 52px !important;
+  }
+
+  .dashboard {
+    padding-left: 7px !important;
+    padding-right: 7px !important;
+  }
+
+  .topbar {
+    padding-left: 7px !important;
+    padding-right: 7px !important;
+  }
+
+  .dashboard-hero {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  #hackathons,
+  .events-subsection,
+  .messages-section,
+  .resources-section,
+  .teams-section,
+  .teams-create-section,
+  .create-team-card {
+    padding-left: 11px !important;
+    padding-right: 11px !important;
+  }
+
+  .team-modern-card {
+    padding: 14px !important;
+  }
+}
+
+@media (max-width: 360px) {
+  .sidebar {
+    width: 48px !important;
+    min-width: 48px !important;
+  }
+
+  .main-content {
+    width: calc(100% - 48px) !important;
+    max-width: calc(100% - 48px) !important;
+    margin-left: 48px !important;
+  }
+
+  .dashboard {
+    padding-left: 5px !important;
+    padding-right: 5px !important;
+  }
+
+  .topbar {
+    padding-left: 5px !important;
+    padding-right: 5px !important;
+  }
+
+  .dashboard-hero {
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+  }
+
+  #hackathons,
+  .events-subsection,
+  .messages-section,
+  .resources-section,
+  .teams-section,
+  .teams-create-section,
+  .create-team-card {
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+  }
+
+  .team-modern-card {
+    padding: 12px !important;
+  }
+
+  .opportunity-detail-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+`;
+
 function App() {
  
 const [authUser, setAuthUser] = useState(null);
@@ -204,6 +1856,7 @@ const signUpSubmittingRef = useRef(false);
 const forgotPasswordSubmittingRef = useRef(false);
 const resendSubmittingRef = useRef(false);
 const [activeNav, setActiveNav] = useState("home");
+const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 const [teamCreated, setTeamCreated] = useState(false);
 const [createdTeam, setCreatedTeam] = useState(null);
 const [signInOpen, setSignInOpen] = useState(false);
@@ -225,6 +1878,33 @@ const [signUpLoading, setSignUpLoading] = useState(false);
 const [selectedHackathon, setSelectedHackathon] = useState(null);
 const [hackathonInterestIds, setHackathonInterestIds] = useState(new Set());
 const [hackathonInterestLoading, setHackathonInterestLoading] = useState(false);
+const [hackathonCategoryFilter, setHackathonCategoryFilter] = useState("");
+const [hackathonDepartmentFilter, setHackathonDepartmentFilter] = useState("");
+const [hackathonYearFilter, setHackathonYearFilter] = useState("");
+const [opportunitySearch, setOpportunitySearch] = useState("");
+const [showAllOpportunities, setShowAllOpportunities] = useState(false);
+const [allCompetitions, setAllCompetitions] = useState([]);
+const [allCompetitionsLoading, setAllCompetitionsLoading] = useState(false);
+const [showAllCompetitions, setShowAllCompetitions] = useState(false);
+const [allCompetitionVisibleCount, setAllCompetitionVisibleCount] = useState(10);
+const [hackathonDetailsExpanded, setHackathonDetailsExpanded] = useState(false);
+
+useEffect(() => {
+  setHackathonDetailsExpanded(false);
+}, [selectedHackathon?.id]);
+
+const [opportunitySort, setOpportunitySort] = useState("deadline");
+
+useEffect(() => {
+  setAllCompetitionVisibleCount(10);
+}, [
+  opportunitySearch,
+  hackathonCategoryFilter,
+  hackathonDepartmentFilter,
+  hackathonYearFilter,
+  opportunitySort,
+  showAllCompetitions,
+]);
 const [eventInterestIds, setEventInterestIds] = useState(new Set());
 const [eventInterestLoading, setEventInterestLoading] = useState(false);
 const [selectedEvent, setSelectedEvent] = useState(null);
@@ -279,6 +1959,22 @@ const [teamChatReportReason, setTeamChatReportReason] = useState("");
 const [teamChatReportDescription, setTeamChatReportDescription] = useState("");
 const [teamChatReportSubmitting, setTeamChatReportSubmitting] = useState(false);
 const teamChatMessagesEndRef = useRef(null);
+
+// ================= ONE-TO-ONE MESSAGES =================
+const [directConversations, setDirectConversations] = useState([]);
+const [directConversationsLoading, setDirectConversationsLoading] = useState(false);
+const [directConversation, setDirectConversation] = useState(null);
+const [directMessages, setDirectMessages] = useState([]);
+const [directMessagesLoading, setDirectMessagesLoading] = useState(false);
+const [directMessageInput, setDirectMessageInput] = useState("");
+const [directMessageSending, setDirectMessageSending] = useState(false);
+const [directMessageOpening, setDirectMessageOpening] = useState(false);
+const [directMessageReportTarget, setDirectMessageReportTarget] = useState(null);
+const [directMessageReportReason, setDirectMessageReportReason] = useState("");
+const [directMessageReportDescription, setDirectMessageReportDescription] = useState("");
+const [directMessageReportSubmitting, setDirectMessageReportSubmitting] = useState(false);
+const [directMessageMenu, setDirectMessageMenu] = useState(null);
+const directMessagesEndRef = useRef(null);
 const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 const [signOutOpen, setSignOutOpen] = useState(false);
 const [communityFilter, setCommunityFilter] = useState("All");
@@ -287,6 +1983,27 @@ const [showSharedResources, setShowSharedResources] = useState(false);
 const [marketplaceOpen, setMarketplaceOpen] = useState(false);
 const [exchangeOpen, setExchangeOpen] = useState(false);
 const [biddingOpen, setBiddingOpen] = useState(false);
+const [tradeGiveCreateOpen, setTradeGiveCreateOpen] = useState(false);
+const [tradeGiveCreating, setTradeGiveCreating] = useState(false);
+const [tradeGiveError, setTradeGiveError] = useState("");
+const [tradeGiveListings, setTradeGiveListings] = useState([]);
+const [tradeGiveLoading, setTradeGiveLoading] = useState(false);
+const [tradeGiveSelectedListing, setTradeGiveSelectedListing] = useState(null);
+const [tradeGiveRequestOpen, setTradeGiveRequestOpen] = useState(false);
+const [tradeGiveRequestText, setTradeGiveRequestText] = useState("");
+const [tradeGiveRequestSubmitting, setTradeGiveRequestSubmitting] = useState(false);
+const [tradeGiveRequests, setTradeGiveRequests] = useState([]);
+const [tradeGiveRequestsLoading, setTradeGiveRequestsLoading] = useState(false);
+const [tradeGiveForm, setTradeGiveForm] = useState({
+  mode: "trade",
+  title: "",
+  description: "",
+  category: "Textbooks",
+  condition: "Good",
+  wantedItem: "",
+  handoverLocation: "CIT Campus",
+  files: [],
+});
 const [profilePageOpen, setProfilePageOpen] = useState(false);
 const [profileNetworkOpen, setProfileNetworkOpen] = useState(false);
 const [profileNetworkTab, setProfileNetworkTab] = useState("requests");
@@ -296,6 +2013,32 @@ const [profileMedia, setProfileMedia] = useState([]);
 const [profileMediaLoading, setProfileMediaLoading] = useState(false);
 const [profileMediaUploading, setProfileMediaUploading] = useState(false);
 const [profileMediaError, setProfileMediaError] = useState("");
+
+// ================= MARKETPLACE V1 =================
+const [marketplaceListings, setMarketplaceListings] = useState([]);
+const [marketplaceLoading, setMarketplaceLoading] = useState(false);
+const [marketplaceError, setMarketplaceError] = useState("");
+const [marketplaceCreateOpen, setMarketplaceCreateOpen] = useState(false);
+const [marketplaceCreating, setMarketplaceCreating] = useState(false);
+const [marketplaceBidLoading, setMarketplaceBidLoading] = useState(false);
+const [marketplaceFormError, setMarketplaceFormError] = useState("");
+const [marketplaceSelectedAuction, setMarketplaceSelectedAuction] = useState(null);
+const [marketplaceBidHistory, setMarketplaceBidHistory] = useState([]);
+const [marketplaceBidHistoryLoading, setMarketplaceBidHistoryLoading] = useState(false);
+const [marketplaceForm, setMarketplaceForm] = useState({
+  title: "",
+  description: "",
+  category: "Textbooks",
+  condition: "Good",
+  listingType: "fixed",
+  price: "",
+  startingPrice: "",
+  minimumBidIncrement: "50",
+  auctionEndAt: "",
+  paymentMethods: ["cash", "online"],
+  handoverLocation: "CIT Campus",
+  files: [],
+});
 const [selectedMedia, setSelectedMedia] = useState(null);
 const [mediaGalleryOpen, setMediaGalleryOpen] = useState(false);
 const [profileData, setProfileData] = useState({
@@ -361,6 +2104,47 @@ useEffect(() => {
   };
 
   loadCommunityResources();
+}, [authUser]);
+
+// Live marketplace listings. The collection is intentionally read as a whole
+// because every document is a public campus listing for verified CIT users.
+useEffect(() => {
+  if (!authUser) {
+    setMarketplaceListings([]);
+    setMarketplaceLoading(false);
+    setMarketplaceError("");
+    return;
+  }
+
+  setMarketplaceLoading(true);
+  setMarketplaceError("");
+
+  const unsubscribe = onSnapshot(
+    collection(db, "marketplaceListings"),
+    (snapshot) => {
+      const listings = snapshot.docs
+        .map((listingDoc) => ({
+          id: listingDoc.id,
+          ...listingDoc.data(),
+        }))
+        .filter((listing) => listing.status !== "removed")
+        .sort((a, b) => {
+          const aTime = a.createdAt?.toMillis?.() || 0;
+          const bTime = b.createdAt?.toMillis?.() || 0;
+          return bTime - aTime;
+        });
+
+      setMarketplaceListings(listings);
+      setMarketplaceLoading(false);
+    },
+    (error) => {
+      console.error("MARKETPLACE LIVE LISTENER ERROR:", error);
+      setMarketplaceError("Unable to load marketplace listings right now.");
+      setMarketplaceLoading(false);
+    }
+  );
+
+  return () => unsubscribe();
 }, [authUser]);
 
 // Load the real CampusConnect data used by the dashboard and community.
@@ -431,11 +2215,23 @@ useEffect(() => {
           campusConnectId: person.campusConnectId || "",
         }));
 
-      const realHackathons = hackathonsSnapshot.docs.map((hackathonDoc) => ({
+      const firestoreHackathons = hackathonsSnapshot.docs.map((hackathonDoc) => ({
         id: hackathonDoc.id,
         ...hackathonDoc.data(),
         icon: hackathonDoc.data().icon || "rocket",
       }));
+
+      let realHackathons = firestoreHackathons;
+      let liveCompetitionSyncError = "";
+
+      try {
+        const liveCompetitions = await fetchLiveCompetitionDashboard();
+        realHackathons = liveCompetitions;
+      } catch (sheetError) {
+        console.error("LIVE COMPETITION SHEET ERROR:", sheetError);
+        liveCompetitionSyncError =
+          "Live competition dashboard could not be reached. Showing saved CampusConnect opportunities.";
+      }
 
       const realEvents = eventsSnapshot.docs.map((eventDoc) => ({
         id: eventDoc.id,
@@ -474,6 +2270,10 @@ useEffect(() => {
         upcomingEvents: upcomingEvents.length,
         teamsFormed: teamsSnapshot.size,
       });
+
+      if (liveCompetitionSyncError) {
+        setDataError(liveCompetitionSyncError);
+      }
     } catch (error) {
       console.error("CAMPUS DATA LOAD ERROR:", error);
 
@@ -493,6 +2293,43 @@ useEffect(() => {
 
   return () => {
     cancelled = true;
+  };
+}, [authUser]);
+
+// Refresh the public Google Sheet periodically so newly added/removed competitions
+// appear without requiring a deployment. Firestore remains the fallback source.
+useEffect(() => {
+  if (!authUser) return undefined;
+
+  let cancelled = false;
+
+  const refreshLiveCompetitions = async () => {
+    try {
+      const liveCompetitions = await fetchLiveCompetitionDashboard();
+      if (!cancelled) {
+        setHackathons(liveCompetitions);
+        setDashboardStats((prev) => ({
+          ...prev,
+          hackathons: liveCompetitions.length,
+        }));
+        setDataError((current) =>
+          current === "Live competition dashboard could not be reached. Showing saved CampusConnect opportunities."
+            ? ""
+            : current
+        );
+      }
+    } catch (error) {
+      console.error("LIVE COMPETITION REFRESH ERROR:", error);
+    }
+  };
+
+  const intervalId = window.setInterval(refreshLiveCompetitions, 5 * 60 * 1000);
+  window.addEventListener("focus", refreshLiveCompetitions);
+
+  return () => {
+    cancelled = true;
+    window.clearInterval(intervalId);
+    window.removeEventListener("focus", refreshLiveCompetitions);
   };
 }, [authUser]);
 
@@ -953,38 +2790,7 @@ const uploadProfileMedia = async (fileList) => {
   setProfileMediaError("");
 
   try {
-    const firebaseIdToken = await authUser.getIdToken();
-
-    const authResponse = await fetch("/api/imagekit-auth", {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${firebaseIdToken}`,
-      },
-    });
-
-    if (!authResponse.ok) {
-      const authError = await authResponse.text();
-
-      console.error(
-        "IMAGEKIT AUTH ERROR:",
-        authResponse.status,
-        authError
-      );
-
-      throw new Error("IMAGEKIT_AUTH_FAILED");
-    }
-
-    const imageKitAuth = await authResponse.json();
-
-    if (
-      !imageKitAuth.token ||
-      !imageKitAuth.signature ||
-      !imageKitAuth.expire ||
-      !imageKitAuth.publicKey
-    ) {
-      throw new Error("IMAGEKIT_AUTH_RESPONSE_INVALID");
-    }
+    const imageKitAuth = await getImageKitAuth(authUser);
 
     for (const file of files) {
       const safeFileName = file.name.replace(
@@ -1096,6 +2902,759 @@ const deleteProfileMedia = async (media) => {
   }
 };
 
+const uploadMarketplaceImages = async (files) => {
+  const imageKitAuth = await getImageKitAuth(authUser);
+
+  const uploadedImages = [];
+
+  for (const file of files) {
+    const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const fileName = `${authUser.uid}-${Date.now()}-${safeFileName}`;
+
+    const uploaded = await imageKitUpload({
+      file,
+      fileName,
+      publicKey: imageKitAuth.publicKey,
+      signature: imageKitAuth.signature,
+      token: imageKitAuth.token,
+      expire: imageKitAuth.expire,
+      folder: `/campusconnect/marketplace/${authUser.uid}`,
+      useUniqueFileName: true,
+    });
+
+    uploadedImages.push({
+      url: uploaded.url,
+      thumbnailUrl: uploaded.thumbnailUrl || uploaded.url,
+      fileId: uploaded.fileId || "",
+      fileName: file.name,
+    });
+  }
+
+  return uploadedImages;
+};
+
+const resetMarketplaceForm = () => {
+  setMarketplaceForm({
+    title: "",
+    description: "",
+    category: "Textbooks",
+    condition: "Good",
+    listingType: "fixed",
+    price: "",
+    startingPrice: "",
+    minimumBidIncrement: "50",
+    auctionEndAt: "",
+    paymentMethods: ["cash", "online"],
+    handoverLocation: "CIT Campus",
+    files: [],
+  });
+  setMarketplaceFormError("");
+};
+
+const handleMarketplaceFormChange = (field, value) => {
+  setMarketplaceForm((prev) => ({ ...prev, [field]: value }));
+};
+
+const toggleMarketplacePaymentMethod = (method) => {
+  setMarketplaceForm((prev) => {
+    const hasMethod = prev.paymentMethods.includes(method);
+    const nextMethods = hasMethod
+      ? prev.paymentMethods.filter((item) => item !== method)
+      : [...prev.paymentMethods, method];
+
+    return { ...prev, paymentMethods: nextMethods };
+  });
+};
+
+const handleMarketplaceFiles = (fileList) => {
+  const files = Array.from(fileList || []);
+
+  if (files.length < 1) {
+    setMarketplaceForm((prev) => ({ ...prev, files: [] }));
+    return;
+  }
+
+  if (files.length > 6) {
+    setMarketplaceFormError("You can add up to 6 product images.");
+    return;
+  }
+
+  const invalid = files.find(
+    (file) => !file.type?.startsWith("image/") || file.size > 10 * 1024 * 1024
+  );
+
+  if (invalid) {
+    setMarketplaceFormError("Only images up to 10 MB each are allowed.");
+    return;
+  }
+
+  setMarketplaceFormError("");
+  setMarketplaceForm((prev) => ({ ...prev, files }));
+};
+
+const createMarketplaceListing = async () => {
+  if (!authUser) return;
+
+  const form = marketplaceForm;
+  const title = form.title.trim();
+  const description = form.description.trim();
+  const paymentMethods = form.paymentMethods;
+
+  if (!title || title.length < 3) {
+    setMarketplaceFormError("Enter a product title.");
+    return;
+  }
+
+  if (!description || description.length < 10) {
+    setMarketplaceFormError("Add a short description of the item.");
+    return;
+  }
+
+  if (!form.files.length) {
+    setMarketplaceFormError("At least one product image is required.");
+    return;
+  }
+
+  if (!paymentMethods.length) {
+    setMarketplaceFormError("Select at least one payment method.");
+    return;
+  }
+
+  const numericPrice = Number(form.price);
+  const numericStartingPrice = Number(form.startingPrice);
+  const numericIncrement = Number(form.minimumBidIncrement);
+
+  if (form.listingType === "fixed" && (!Number.isFinite(numericPrice) || numericPrice <= 0)) {
+    setMarketplaceFormError("Enter a valid selling price.");
+    return;
+  }
+
+  if (form.listingType === "auction") {
+    if (!Number.isFinite(numericStartingPrice) || numericStartingPrice <= 0) {
+      setMarketplaceFormError("Enter a valid starting price.");
+      return;
+    }
+
+    if (!Number.isFinite(numericIncrement) || numericIncrement <= 0) {
+      setMarketplaceFormError("Enter a valid minimum bid increment.");
+      return;
+    }
+
+    if (!form.auctionEndAt) {
+      setMarketplaceFormError("Choose when the auction ends.");
+      return;
+    }
+
+    const auctionEnd = new Date(form.auctionEndAt);
+    if (Number.isNaN(auctionEnd.getTime()) || auctionEnd <= new Date()) {
+      setMarketplaceFormError("Auction end time must be in the future.");
+      return;
+    }
+  }
+
+  setMarketplaceCreating(true);
+  setMarketplaceFormError("");
+
+  try {
+    const uploadedImages = await uploadMarketplaceImages(form.files);
+    const profileName =
+      profileData.name || authUser.displayName || authUser.email?.split("@")[0] || "CIT Student";
+
+    const listingData = {
+      sellerId: authUser.uid,
+      sellerName: profileName,
+      sellerDepartment: profileData.department || "",
+      sellerYear: profileData.year || "",
+      sellerCampusConnectId: profileData.campusConnectId || "",
+      title,
+      description,
+      category: form.category,
+      condition: form.condition,
+      listingType: form.listingType,
+      price: form.listingType === "fixed" ? numericPrice : null,
+      startingPrice: form.listingType === "auction" ? numericStartingPrice : null,
+      currentPrice: form.listingType === "auction" ? numericStartingPrice : null,
+      minimumBidIncrement:
+        form.listingType === "auction" ? numericIncrement : null,
+      auctionEndAt:
+        form.listingType === "auction"
+          ? new Date(form.auctionEndAt)
+          : null,
+      bidCount: 0,
+      highestBidderId: "",
+      highestBidderName: "",
+      lastBidId: "",
+      paymentMethods,
+      handoverLocation: form.handoverLocation.trim() || "CIT Campus",
+      imageUrls: uploadedImages.map((image) => image.url),
+      imageThumbnails: uploadedImages.map((image) => image.thumbnailUrl),
+      imageFileIds: uploadedImages.map((image) => image.fileId),
+      imageFileNames: uploadedImages.map((image) => image.fileName),
+      status: "active",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    await addDoc(collection(db, "marketplaceListings"), listingData);
+
+    resetMarketplaceForm();
+    setMarketplaceCreateOpen(false);
+    showActionToast(
+      form.listingType === "auction"
+        ? "Auction listing created successfully."
+        : "Marketplace listing created successfully."
+    );
+  } catch (error) {
+    console.error("MARKETPLACE CREATE ERROR:", error);
+    setMarketplaceFormError(
+      "Unable to create the listing. Please check your ImageKit and Firestore setup."
+    );
+  } finally {
+    setMarketplaceCreating(false);
+  }
+};
+
+// ================= TRADE OR GIVE =================
+const uploadTradeGiveImages = async (files) => {
+  const imageKitAuth = await getImageKitAuth(authUser);
+
+  const uploadedImages = [];
+
+  for (const file of files) {
+    const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const fileName = `${authUser.uid}-${Date.now()}-${safeFileName}`;
+
+    const uploaded = await imageKitUpload({
+      file,
+      fileName,
+      publicKey: imageKitAuth.publicKey,
+      signature: imageKitAuth.signature,
+      token: imageKitAuth.token,
+      expire: imageKitAuth.expire,
+      folder: `/campusconnect/trade-or-give/${authUser.uid}`,
+      useUniqueFileName: true,
+    });
+
+    uploadedImages.push({
+      url: uploaded.url,
+      thumbnailUrl: uploaded.thumbnailUrl || uploaded.url,
+      fileId: uploaded.fileId || "",
+      fileName: file.name,
+    });
+  }
+
+  return uploadedImages;
+};
+
+const handleTradeGiveFormChange = (field, value) => {
+  setTradeGiveForm((prev) => ({ ...prev, [field]: value }));
+  if (field === "mode") {
+    setTradeGiveError("");
+  }
+};
+
+const handleTradeGiveFiles = (fileList) => {
+  const files = Array.from(fileList || []);
+
+  if (files.length < 1) {
+    setTradeGiveForm((prev) => ({ ...prev, files: [] }));
+    return;
+  }
+
+  if (files.length > 6) {
+    setTradeGiveError("You can add up to 6 item images.");
+    return;
+  }
+
+  const invalid = files.find(
+    (file) => !file.type?.startsWith("image/") || file.size > 10 * 1024 * 1024
+  );
+
+  if (invalid) {
+    setTradeGiveError("Only images up to 10 MB each are allowed.");
+    return;
+  }
+
+  setTradeGiveError("");
+  setTradeGiveForm((prev) => ({ ...prev, files }));
+};
+
+const resetTradeGiveForm = () => {
+  setTradeGiveForm({
+    mode: "trade",
+    title: "",
+    description: "",
+    category: "Textbooks",
+    condition: "Good",
+    wantedItem: "",
+    handoverLocation: "CIT Campus",
+    files: [],
+  });
+  setTradeGiveError("");
+};
+
+const openTradeGive = () => {
+  setExchangeOpen(true);
+};
+
+const createTradeGiveListing = async () => {
+  if (!authUser) return;
+
+  const form = tradeGiveForm;
+  const title = form.title.trim();
+  const description = form.description.trim();
+  const wantedItem = form.wantedItem.trim();
+
+  if (!title || title.length < 3) {
+    setTradeGiveError("Enter an item title.");
+    return;
+  }
+
+  if (!description || description.length < 10) {
+    setTradeGiveError("Add a short description of the item.");
+    return;
+  }
+
+  if (form.mode === "trade" && (!wantedItem || wantedItem.length < 3)) {
+    setTradeGiveError("Tell students what you would like in return.");
+    return;
+  }
+
+  if (!form.files.length) {
+    setTradeGiveError("At least one item image is required.");
+    return;
+  }
+
+  setTradeGiveCreating(true);
+  setTradeGiveError("");
+
+  try {
+    const uploadedImages = await uploadTradeGiveImages(form.files);
+    const profileName =
+      profileData.name ||
+      authUser.displayName ||
+      authUser.email?.split("@")[0] ||
+      "CIT Student";
+
+    await addDoc(collection(db, "tradeGiveListings"), {
+      ownerId: authUser.uid,
+      ownerName: profileName,
+      ownerDepartment: profileData.department || "",
+      ownerYear: profileData.year || "",
+      ownerCampusConnectId: profileData.campusConnectId || "",
+      mode: form.mode,
+      title,
+      description,
+      category: form.category,
+      condition: form.condition,
+      wantedItem: form.mode === "trade" ? wantedItem : "",
+      handoverLocation: form.handoverLocation.trim() || "CIT Campus",
+      imageUrls: uploadedImages.map((image) => image.url),
+      imageThumbnails: uploadedImages.map((image) => image.thumbnailUrl),
+      imageFileIds: uploadedImages.map((image) => image.fileId),
+      imageFileNames: uploadedImages.map((image) => image.fileName),
+      status: "active",
+      requestCount: 0,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    resetTradeGiveForm();
+    setTradeGiveCreateOpen(false);
+    showActionToast(
+      form.mode === "trade"
+        ? "Trade listing created successfully."
+        : "Give listing created successfully."
+    );
+  } catch (error) {
+    console.error("TRADE OR GIVE CREATE ERROR:", error);
+    setTradeGiveError("Unable to create the listing. Please try again.");
+  } finally {
+    setTradeGiveCreating(false);
+  }
+};
+
+const openTradeGiveListing = (listing) => {
+  setTradeGiveSelectedListing(listing);
+  setTradeGiveRequestOpen(false);
+  setTradeGiveRequestText("");
+};
+
+const submitTradeGiveRequest = async () => {
+  const listing = tradeGiveSelectedListing;
+  if (!authUser || !listing?.id) return;
+
+  if (listing.ownerId === authUser.uid) {
+    showActionToast("You cannot request your own listing.");
+    return;
+  }
+
+  if (listing.status !== "active") {
+    showActionToast("This item is no longer available.");
+    return;
+  }
+
+  if (listing.mode === "trade" && tradeGiveRequestText.trim().length < 3) {
+    showActionToast("Describe what you would like to offer in return.");
+    return;
+  }
+
+  setTradeGiveRequestSubmitting(true);
+
+  try {
+    const requesterName =
+      profileData.name ||
+      authUser.displayName ||
+      authUser.email?.split("@")[0] ||
+      "CIT Student";
+
+    await addDoc(collection(db, "tradeGiveRequests"), {
+      listingId: listing.id,
+      listingTitle: listing.title,
+      listingMode: listing.mode,
+      ownerId: listing.ownerId,
+      ownerName: listing.ownerName || "CIT Student",
+      requesterId: authUser.uid,
+      requesterName,
+      requesterDepartment: profileData.department || "",
+      requesterYear: profileData.year || "",
+      message: tradeGiveRequestText.trim(),
+      status: "pending",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    setTradeGiveRequestOpen(false);
+    setTradeGiveRequestText("");
+    showActionToast(
+      listing.mode === "trade"
+        ? "Trade request sent to the student."
+        : "Claim request sent to the student."
+    );
+  } catch (error) {
+    console.error("TRADE OR GIVE REQUEST ERROR:", error);
+    showActionToast("Unable to send the request right now.");
+  } finally {
+    setTradeGiveRequestSubmitting(false);
+  }
+};
+
+const updateTradeGiveRequest = async (requestItem, nextStatus) => {
+  if (!authUser || !requestItem?.id || !tradeGiveSelectedListing?.id) return;
+
+  if (tradeGiveSelectedListing.ownerId !== authUser.uid) {
+    showActionToast("Only the item owner can manage requests.");
+    return;
+  }
+
+  try {
+    await updateDoc(doc(db, "tradeGiveRequests", requestItem.id), {
+      status: nextStatus,
+      updatedAt: serverTimestamp(),
+    });
+
+    if (nextStatus === "accepted") {
+      await updateDoc(doc(db, "tradeGiveListings", tradeGiveSelectedListing.id), {
+        status: "reserved",
+        updatedAt: serverTimestamp(),
+      });
+
+      setTradeGiveSelectedListing((prev) =>
+        prev?.id === tradeGiveSelectedListing.id
+          ? { ...prev, status: "reserved" }
+          : prev
+      );
+    }
+
+    showActionToast(
+      nextStatus === "accepted"
+        ? "Request accepted."
+        : "Request declined."
+    );
+  } catch (error) {
+    console.error("TRADE OR GIVE REQUEST UPDATE ERROR:", error);
+    showActionToast("Unable to update the request.");
+  }
+};
+
+// Live Trade or Give listings.
+useEffect(() => {
+  if (!authUser) {
+    setTradeGiveListings([]);
+    setTradeGiveLoading(false);
+    return undefined;
+  }
+
+  setTradeGiveLoading(true);
+
+  const unsubscribe = onSnapshot(
+    collection(db, "tradeGiveListings"),
+    (snapshot) => {
+      const listings = snapshot.docs
+        .map((listingDoc) => ({
+          id: listingDoc.id,
+          ...listingDoc.data(),
+        }))
+        .filter((listing) => listing.status !== "removed")
+        .sort((a, b) => {
+          const aTime = a.createdAt?.toMillis?.() || 0;
+          const bTime = b.createdAt?.toMillis?.() || 0;
+          return bTime - aTime;
+        });
+
+      setTradeGiveListings(listings);
+      setTradeGiveLoading(false);
+    },
+    (error) => {
+      console.error("TRADE OR GIVE LIVE LISTENER ERROR:", error);
+      setTradeGiveListings([]);
+      setTradeGiveLoading(false);
+    }
+  );
+
+  return () => unsubscribe();
+}, [authUser]);
+
+// Requests for the selected listing: owners see all incoming requests;
+// other students see only their own request for that listing.
+useEffect(() => {
+  if (!authUser || !tradeGiveSelectedListing?.id) {
+    setTradeGiveRequests([]);
+    setTradeGiveRequestsLoading(false);
+    return undefined;
+  }
+
+  setTradeGiveRequestsLoading(true);
+
+  const isOwner = tradeGiveSelectedListing.ownerId === authUser.uid;
+  const requestsQuery = isOwner
+    ? query(
+        collection(db, "tradeGiveRequests"),
+        where("listingId", "==", tradeGiveSelectedListing.id)
+      )
+    : query(
+        collection(db, "tradeGiveRequests"),
+        where("listingId", "==", tradeGiveSelectedListing.id),
+        where("requesterId", "==", authUser.uid)
+      );
+
+  const unsubscribe = onSnapshot(
+    requestsQuery,
+    (snapshot) => {
+      const requests = snapshot.docs
+        .map((requestDoc) => ({
+          id: requestDoc.id,
+          ...requestDoc.data(),
+        }))
+        .sort((a, b) => {
+          const aTime = a.createdAt?.toMillis?.() || 0;
+          const bTime = b.createdAt?.toMillis?.() || 0;
+          return bTime - aTime;
+        });
+
+      setTradeGiveRequests(requests);
+      setTradeGiveRequestsLoading(false);
+    },
+    (error) => {
+      console.error("TRADE OR GIVE REQUEST LISTENER ERROR:", error);
+      setTradeGiveRequests([]);
+      setTradeGiveRequestsLoading(false);
+    }
+  );
+
+  return () => unsubscribe();
+}, [authUser, tradeGiveSelectedListing?.id, tradeGiveSelectedListing?.ownerId]);
+
+const loadMarketplaceBidHistory = (listing) => {
+  if (!listing?.id) return;
+
+  setMarketplaceSelectedAuction(listing);
+};
+
+// Keep the selected auction's bid history live.
+// New bids appear automatically without reopening the auction.
+useEffect(() => {
+  if (!authUser || !marketplaceSelectedAuction?.id) {
+    setMarketplaceBidHistory([]);
+    setMarketplaceBidHistoryLoading(false);
+    return undefined;
+  }
+
+  setMarketplaceBidHistoryLoading(true);
+
+  const bidsQuery = query(
+    collection(db, "marketplaceBids"),
+    where(
+      "listingId",
+      "==",
+      marketplaceSelectedAuction.id
+    )
+  );
+
+  const unsubscribe = onSnapshot(
+    bidsQuery,
+    (snapshot) => {
+      const bids = snapshot.docs
+        .map((bidDoc) => ({
+          id: bidDoc.id,
+          ...bidDoc.data(),
+        }))
+        .sort((a, b) => {
+          const amountDifference =
+            Number(b.amount || 0) -
+            Number(a.amount || 0);
+
+          if (amountDifference !== 0) {
+            return amountDifference;
+          }
+
+          const aTime =
+            a.createdAt?.toMillis?.() || 0;
+
+          const bTime =
+            b.createdAt?.toMillis?.() || 0;
+
+          return bTime - aTime;
+        });
+
+      setMarketplaceBidHistory(bids);
+      setMarketplaceBidHistoryLoading(false);
+    },
+    (error) => {
+      console.error(
+        "MARKETPLACE BID HISTORY ERROR:",
+        error
+      );
+
+      setMarketplaceBidHistory([]);
+      setMarketplaceBidHistoryLoading(false);
+    }
+  );
+
+  return () => unsubscribe();
+}, [
+  authUser,
+  marketplaceSelectedAuction?.id,
+]);
+
+const placeMarketplaceBid = async (listing, amountValue) => {
+  if (!authUser || !listing?.id) return;
+
+  const amount = Number(amountValue);
+  const currentPrice = Number(listing.currentPrice || listing.startingPrice || 0);
+  const minimumIncrement = Number(listing.minimumBidIncrement || 1);
+
+  if (listing.sellerId === authUser.uid) {
+    showActionToast("You cannot bid on your own listing.");
+    return;
+  }
+
+  if (listing.listingType !== "auction" || listing.status !== "active") {
+    showActionToast("This auction is not active.");
+    return;
+  }
+
+  const endDate = listing.auctionEndAt?.toDate?.() || new Date(listing.auctionEndAt);
+  if (!endDate || Number.isNaN(endDate.getTime()) || endDate <= new Date()) {
+    showActionToast("This auction has ended.");
+    return;
+  }
+
+  if (!Number.isFinite(amount) || amount < currentPrice + minimumIncrement) {
+    showActionToast(
+      `Minimum next bid is ₹${Math.ceil(currentPrice + minimumIncrement)}`
+    );
+    return;
+  }
+
+  setMarketplaceBidLoading(true);
+
+  try {
+    const listingRef = doc(db, "marketplaceListings", listing.id);
+    const bidRef = doc(collection(db, "marketplaceBids"));
+    const bidderName =
+      profileData.name || authUser.displayName || authUser.email?.split("@")[0] || "CIT Student";
+
+    await runTransaction(db, async (transaction) => {
+      const listingSnapshot = await transaction.get(listingRef);
+
+      if (!listingSnapshot.exists()) {
+        throw new Error("LISTING_NOT_FOUND");
+      }
+
+      const liveListing = listingSnapshot.data();
+      const liveCurrentPrice = Number(
+        liveListing.currentPrice || liveListing.startingPrice || 0
+      );
+      const liveIncrement = Number(liveListing.minimumBidIncrement || 1);
+      const liveEnd =
+        liveListing.auctionEndAt?.toDate?.() || new Date(liveListing.auctionEndAt);
+
+      if (liveListing.sellerId === authUser.uid) {
+        throw new Error("OWN_LISTING");
+      }
+
+      if (liveListing.listingType !== "auction" || liveListing.status !== "active") {
+        throw new Error("AUCTION_INACTIVE");
+      }
+
+      if (!liveEnd || Number.isNaN(liveEnd.getTime()) || liveEnd <= new Date()) {
+        throw new Error("AUCTION_ENDED");
+      }
+
+      if (amount < liveCurrentPrice + liveIncrement) {
+        throw new Error("BID_TOO_LOW");
+      }
+
+      transaction.set(bidRef, {
+        listingId: listing.id,
+        bidderId: authUser.uid,
+        bidderName,
+        amount,
+        createdAt: serverTimestamp(),
+      });
+
+      transaction.update(listingRef, {
+        currentPrice: amount,
+        highestBidderId: authUser.uid,
+        highestBidderName: bidderName,
+        bidCount: increment(1),
+        lastBidId: bidRef.id,
+        updatedAt: serverTimestamp(),
+      });
+    });
+
+    setMarketplaceSelectedAuction((prev) =>
+      prev?.id === listing.id
+        ? {
+            ...prev,
+            currentPrice: amount,
+            highestBidderId: authUser.uid,
+            highestBidderName: bidderName,
+            bidCount:
+              Number(prev.bidCount || 0) + 1,
+          }
+        : prev
+    );
+
+    showActionToast("Bid placed successfully.");
+  } catch (error) {
+    console.error("MARKETPLACE BID ERROR:", error);
+
+    const messages = {
+      OWN_LISTING: "You cannot bid on your own listing.",
+      AUCTION_INACTIVE: "This auction is no longer active.",
+      AUCTION_ENDED: "This auction has ended.",
+      BID_TOO_LOW: "Another bid was placed first. Enter a higher bid.",
+      LISTING_NOT_FOUND: "This listing no longer exists.",
+    };
+
+    showActionToast(messages[error.message] || "Unable to place the bid.");
+  } finally {
+    setMarketplaceBidLoading(false);
+  }
+};
+
 const normalizedCommunitySearch = communitySearch.toLowerCase().trim();
 const [shareResourceOpen, setShareResourceOpen] = useState(false);
 const [shareSuccess, setShareSuccess] = useState(false);
@@ -1204,27 +3763,204 @@ const handleNavigation = (id) => {
   setProfilePageOpen(false);
 
   const element = document.getElementById(id);
-
   if (!element) return;
 
-  let topOffset = 95;
-
-  if (id === "hackathons") {
-    topOffset = 580;
-  } else if (id === "community") {
-    topOffset = 150;
-  } else if (id === "events") {
-    topOffset = 150;
-  }
-
-  const elementPosition =
-    element.getBoundingClientRect().top + window.scrollY;
-
-  window.scrollTo({
-    top: elementPosition - topOffset,
-    behavior: "smooth",
+  requestAnimationFrame(() => {
+    element.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
   });
 };
+
+const getDirectConversationId = (otherUserId) => {
+  if (!authUser?.uid || !otherUserId) return null;
+  return `dm_${[authUser.uid, otherUserId].sort().join("_")}`;
+};
+
+const getDirectOtherParticipant = (conversation) => {
+  if (!conversation || !authUser?.uid) return null;
+
+  const index = Array.isArray(conversation.memberIds)
+    ? conversation.memberIds.findIndex((id) => id !== authUser.uid)
+    : -1;
+
+  if (index < 0) return null;
+
+  return conversation.memberProfiles?.[index] || {
+    id: conversation.memberIds[index],
+    name: "CIT Student",
+  };
+};
+
+const openDirectConversation = async (student) => {
+  if (!authUser || !student?.id || student.id === authUser.uid) return;
+
+  setDirectMessageOpening(true);
+
+  try {
+    const conversationId = getDirectConversationId(student.id);
+    const memberIds = [authUser.uid, student.id].sort();
+    const memberProfiles = memberIds.map((id) => {
+      if (id === authUser.uid) {
+        return {
+          id,
+          name: profileData.name || authUser.displayName || "CIT Student",
+          campusConnectId: profileData.campusConnectId || "",
+        };
+      }
+
+      return {
+        id,
+        name: student.name || "CIT Student",
+        campusConnectId: student.campusConnectId || "",
+      };
+    });
+
+    await setDoc(
+      doc(db, "directConversations", conversationId),
+      {
+        memberIds,
+        memberProfiles,
+        updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    setDirectConversation({
+      id: conversationId,
+      memberIds,
+      memberProfiles,
+    });
+    setSelectedStudent(null);
+    setSearchOpen(false);
+    setActiveNav("messages");
+
+    requestAnimationFrame(() => {
+      document.getElementById("messages")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  } catch (error) {
+    console.error("DIRECT MESSAGE OPEN ERROR:", error);
+    showActionToast("Unable to open this conversation. Please try again.");
+  } finally {
+    setDirectMessageOpening(false);
+  }
+};
+
+const sendDirectMessage = async () => {
+  if (!authUser || !directConversation?.id || directMessageSending) return;
+
+  const message = directMessageInput.trim();
+  if (!message) return;
+
+  if (message.length > 2000) {
+    showActionToast("Messages can be up to 2000 characters.");
+    return;
+  }
+
+  const otherParticipant = getDirectOtherParticipant(directConversation);
+  if (!otherParticipant?.id) return;
+
+  setDirectMessageSending(true);
+
+  try {
+    await addDoc(
+      collection(
+        db,
+        "directConversations",
+        directConversation.id,
+        "messages"
+      ),
+      {
+        conversationId: directConversation.id,
+        senderId: authUser.uid,
+        recipientId: otherParticipant.id,
+        message,
+        senderName: profileData.name || authUser.displayName || "CIT Student",
+        createdAt: serverTimestamp(),
+      }
+    );
+
+    await updateDoc(
+      doc(db, "directConversations", directConversation.id),
+      {
+        lastMessage: message,
+        lastMessageAt: serverTimestamp(),
+        lastSenderId: authUser.uid,
+        updatedAt: serverTimestamp(),
+        [`unreadCounts.${otherParticipant.id}`]: increment(1),
+        [`unreadCounts.${authUser.uid}`]: 0,
+      }
+    );
+
+    setDirectMessageInput("");
+  } catch (error) {
+    console.error("DIRECT MESSAGE SEND ERROR:", error);
+    showActionToast("Unable to send the message. Please try again.");
+  } finally {
+    setDirectMessageSending(false);
+  }
+};
+
+
+const submitDirectMessageReport = async () => {
+  const target = directMessageReportTarget;
+  if (
+    !authUser ||
+    !directConversation?.id ||
+    !target?.id ||
+    !target.senderId ||
+    target.senderId === authUser.uid ||
+    !directMessageReportReason ||
+    directMessageReportSubmitting
+  ) {
+    return;
+  }
+
+  setDirectMessageReportSubmitting(true);
+
+  try {
+    await addDoc(collection(db, "directMessageReports"), {
+      conversationId: directConversation.id,
+      messageId: target.id,
+      reportedUserId: target.senderId,
+      reporterId: authUser.uid,
+      reason: directMessageReportReason,
+      description: directMessageReportDescription.trim().slice(0, 1000),
+      message: target.message || "",
+      status: "pending",
+      createdAt: serverTimestamp(),
+    });
+
+    setDirectMessageReportTarget(null);
+    setDirectMessageReportReason("");
+    setDirectMessageReportDescription("");
+    showActionToast("Report submitted. Thank you for helping keep messages safe.");
+  } catch (error) {
+    console.error("DIRECT MESSAGE REPORT ERROR:", error);
+
+    if (error?.code === "permission-denied") {
+      showActionToast(
+        "Firebase denied the report. Make sure the latest Firestore rules are published."
+      );
+    } else {
+      showActionToast("Unable to submit the report. Please try again.");
+    }
+  } finally {
+    setDirectMessageReportSubmitting(false);
+  }
+};
+
+const closeDirectConversation = () => {
+  setDirectConversation(null);
+  setDirectMessages([]);
+  setDirectMessageInput("");
+};
+
 
 
   useEffect(() => {
@@ -2844,6 +5580,118 @@ useEffect(() => {
   return () => unsubscribe();
 }, [teamChatOpen, teamChatTeam?.id, authUser]);
 
+// Live list of the signed-in student's direct conversations.
+useEffect(() => {
+  if (!authUser) {
+    setDirectConversations([]);
+    setDirectConversationsLoading(false);
+    return undefined;
+  }
+
+  setDirectConversationsLoading(true);
+
+  const conversationsQuery = query(
+    collection(db, "directConversations"),
+    where("memberIds", "array-contains", authUser.uid)
+  );
+
+  const unsubscribe = onSnapshot(
+    conversationsQuery,
+    (snapshot) => {
+      const conversations = snapshot.docs
+        .map((conversationDoc) => ({
+          id: conversationDoc.id,
+          ...conversationDoc.data(),
+        }))
+        .sort((a, b) => {
+          const aTime = a.updatedAt?.toMillis?.() || a.lastMessageAt?.toMillis?.() || 0;
+          const bTime = b.updatedAt?.toMillis?.() || b.lastMessageAt?.toMillis?.() || 0;
+          return bTime - aTime;
+        });
+
+      setDirectConversations(conversations);
+      setDirectConversationsLoading(false);
+    },
+    (error) => {
+      console.error("DIRECT CONVERSATIONS LISTENER ERROR:", error);
+      setDirectConversations([]);
+      setDirectConversationsLoading(false);
+    }
+  );
+
+  return () => unsubscribe();
+}, [authUser]);
+
+// Live messages for the selected direct conversation.
+useEffect(() => {
+  if (!authUser || !directConversation?.id) {
+    setDirectMessages([]);
+    setDirectMessagesLoading(false);
+    return undefined;
+  }
+
+  setDirectMessagesLoading(true);
+
+  const messagesRef = collection(
+    db,
+    "directConversations",
+    directConversation.id,
+    "messages"
+  );
+
+  const unsubscribe = onSnapshot(
+    messagesRef,
+    (snapshot) => {
+      const messages = snapshot.docs
+        .map((messageDoc) => ({
+          id: messageDoc.id,
+          ...messageDoc.data(),
+        }))
+        .sort((a, b) => {
+          const aTime = a.createdAt?.toMillis?.() || 0;
+          const bTime = b.createdAt?.toMillis?.() || 0;
+          return aTime - bTime;
+        });
+
+      setDirectMessages(messages);
+      setDirectMessagesLoading(false);
+    },
+    (error) => {
+      console.error("DIRECT MESSAGES LISTENER ERROR:", error);
+      setDirectMessages([]);
+      setDirectMessagesLoading(false);
+      showActionToast("Unable to load this conversation.");
+    }
+  );
+
+  return () => unsubscribe();
+}, [authUser, directConversation?.id]);
+
+useEffect(() => {
+  if (!directConversation?.id || !authUser?.uid || directMessages.length === 0) return;
+
+  const latestMessage = directMessages[directMessages.length - 1];
+  if (!latestMessage || latestMessage.senderId === authUser.uid) return;
+
+  updateDoc(
+    doc(db, "directConversations", directConversation.id),
+    {
+      [`unreadCounts.${authUser.uid}`]: 0,
+      [`lastReadAt.${authUser.uid}`]: serverTimestamp(),
+    }
+  ).catch((error) => {
+    console.error("DIRECT MESSAGE AUTO-READ ERROR:", error);
+  });
+}, [directMessages, directConversation?.id, authUser?.uid]);
+
+useEffect(() => {
+  if (!directConversation) return;
+  directMessagesEndRef.current?.scrollIntoView({
+    behavior: "smooth",
+    block: "nearest",
+  });
+}, [directMessages, directConversation]);
+
 useEffect(() => {
   if (!teamChatOpen) return;
   teamChatMessagesEndRef.current?.scrollIntoView({
@@ -3671,6 +6519,26 @@ const respondToTeamInvitation = async (invitation, decision) => {
   }
 };
 
+const getOpportunityUrl = (item) => getOpportunityOfficialUrl(item);
+
+const getEventDashboardUrl = (event) => {
+  if (!event) return "";
+  const candidates = [event.dashboardUrl, event.sourceDashboardUrl, event.sourceUrl];
+  return candidates.find((value) => typeof value === "string" && value.trim())?.trim() || "";
+};
+
+const getOpportunityCategory = (item) =>
+  (item?.category || item?.type || item?.domain || "").toString().trim();
+
+const getOpportunityDepartment = (item) =>
+  (item?.department || item?.organizingDepartment || item?.dept || "").toString().trim();
+
+const getOpportunityYear = (item) =>
+  (item?.year || item?.eligibleYear || item?.eligibleYears || item?.targetYear || "").toString().trim();
+
+const getOpportunityEligibility = (item) =>
+  (item?.eligibility || item?.eligibleFor || item?.audience || "").toString().trim();
+
 const getDataIcon = (iconName, fallback = Code2) => {
   const icons = {
     rocket: Rocket,
@@ -3691,6 +6559,102 @@ const normalizedTeammateSkill = teammateSkillFilter.toLowerCase().trim();
 
 const normalizeCampusConnectId = (value) =>
   (value || "").toString().toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const competitionFilterSource = showAllCompetitions && allCompetitions.length ? allCompetitions : hackathons;
+
+const hackathonFilterOptions = useMemo(() => {
+  const categories = [...new Set(competitionFilterSource.map(getOpportunityCategory).filter(Boolean))].sort();
+  const departments = [...new Set(competitionFilterSource.map(getOpportunityDepartment).filter(Boolean))].sort();
+  const years = [...new Set(competitionFilterSource.map(getOpportunityYear).filter(Boolean))].sort();
+  return { categories, departments, years };
+}, [competitionFilterSource]);
+
+const filterCompetitionList = (items) => {
+  const normalizedSearch = opportunitySearch.trim().toLowerCase();
+  const filtered = items.filter((competition) => {
+    const searchableText = [
+      competition.name,
+      competition.description,
+      competition.detailOverview,
+      competition.category,
+      competition.organizer,
+      competition.eligibleYear,
+      competition.prizeAmount,
+      competition.sourceStatus,
+      competition.statusLabel,
+    ].filter(Boolean).join(" ").toLowerCase();
+
+    const matchesSearch = !normalizedSearch || searchableText.includes(normalizedSearch);
+    const matchesCategory = !hackathonCategoryFilter || getOpportunityCategory(competition) === hackathonCategoryFilter;
+    const matchesDepartment = !hackathonDepartmentFilter || getOpportunityDepartment(competition) === hackathonDepartmentFilter;
+    const matchesYear = !hackathonYearFilter || getOpportunityYear(competition) === hackathonYearFilter;
+    return matchesSearch && matchesCategory && matchesDepartment && matchesYear;
+  });
+
+  return [...filtered].sort((a, b) => {
+    if (opportunitySort === "name") return (a.name || "").localeCompare(b.name || "");
+    if (opportunitySort === "prize") return (b.prizeAmount || "").localeCompare(a.prizeAmount || "");
+    return (a.daysRemaining ?? 999999) - (b.daysRemaining ?? 999999);
+  });
+};
+
+const filteredOpportunityHackathons = useMemo(
+  () => filterCompetitionList(hackathons),
+  [hackathons, opportunitySearch, hackathonCategoryFilter, hackathonDepartmentFilter, hackathonYearFilter, opportunitySort]
+);
+
+const filteredAllCompetitionHackathons = useMemo(
+  () => filterCompetitionList(allCompetitions),
+  [allCompetitions, opportunitySearch, hackathonCategoryFilter, hackathonDepartmentFilter, hackathonYearFilter, opportunitySort]
+);
+
+const displayedCompetitionList = showAllCompetitions ? filteredAllCompetitionHackathons : filteredOpportunityHackathons;
+const visibleOpportunityHackathons = showAllCompetitions
+  ? displayedCompetitionList.slice(0, allCompetitionVisibleCount)
+  : showAllOpportunities
+  ? displayedCompetitionList
+  : displayedCompetitionList.slice(0, 12);
+
+const closingSoonOpportunities = filteredOpportunityHackathons.filter(
+  (item) => typeof item.daysRemaining === "number" && item.daysRemaining >= 0 && item.daysRemaining <= 7
+);
+
+const activeCompetitionCount = allCompetitions.filter((item) => item.activeForRegistration).length;
+const closedCompetitionCount = allCompetitions.filter((item) => !item.activeForRegistration).length;
+
+const loadAllCompetitions = async () => {
+  if (allCompetitionsLoading) return [];
+  setAllCompetitionsLoading(true);
+  try {
+    const competitions = await fetchAllCompetitionDashboard();
+    const enriched = enrichCompetitionLinks(competitions);
+    setAllCompetitions(enriched);
+    return enriched;
+  } catch (error) {
+    console.error("ALL COMPETITIONS LOAD ERROR:", error);
+    showActionToast("Could not load the complete competition dashboard right now.");
+    return [];
+  } finally {
+    setAllCompetitionsLoading(false);
+  }
+};
+
+const toggleAllCompetitionsView = async () => {
+  if (showAllCompetitions) {
+    setShowAllCompetitions(false);
+    setAllCompetitionVisibleCount(10);
+    return;
+  }
+
+  if (!allCompetitions.length) {
+    const loaded = await loadAllCompetitions();
+    if (!loaded.length) return;
+  }
+
+  setShowAllCompetitions(true);
+  setShowAllOpportunities(false);
+  setAllCompetitionVisibleCount(10);
+};
 
 const filteredTeammates = teammates.filter((person) => {
   const personName = (person.name || "").toLowerCase();
@@ -3775,7 +6739,7 @@ const openTeams = allTeams.filter(
     !userTeams.some((mine) => mine.id === team.id)
 );
 
-const filteredHackathons = hackathons.filter((hackathon) => {
+const filteredSearchHackathons = hackathons.filter((hackathon) => {
   const query = searchText.toLowerCase().trim();
 
   if (!query) return false;
@@ -3814,7 +6778,8 @@ if (authLoading) {
 }
 if (!authUser) {
   return (
-    <div className={`app-shell ${lightMode ? "light-mode" : ""}`}>
+    <div className={`app-shell ${lightMode ? "light-mode" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+      <style>{COMPETITION_FINAL_POLISH_CSS}</style>
       <div className="auth-page">
         <div className="auth-card">
 
@@ -3935,11 +6900,15 @@ onClick={() => {
 onSubmit={async (e) => {
   e.preventDefault();
 
-  const emailInput = e.currentTarget.querySelector(
+  // Keep a stable reference to the form before any async work.
+  // React can make e.currentTarget null after an await.
+  const form = e.currentTarget;
+
+  const emailInput = form.querySelector(
     'input[type="email"]'
   );
 
-  const passwordInput = e.currentTarget.querySelector(
+  const passwordInput = form.querySelector(
     'input[type="password"]'
   );
 
@@ -3997,7 +6966,7 @@ onSubmit={async (e) => {
 
     authFlowRef.current = null;
 
-    e.currentTarget.reset();
+    form.reset();
   } catch (error) {
     console.error("SIGN IN ERROR:", error);
 
@@ -4517,11 +7486,25 @@ const profileViewActivity = viewedProfile?.activityData || activityData;
 const viewingOwnProfile = !viewedProfile || viewedProfile.id === authUser?.uid;
 
 return (
-  <div className={`app-shell ${lightMode ? "light-mode" : ""}`}>
+  <div className={`app-shell ${lightMode ? "light-mode" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
 
       {/* ================= SIDEBAR ================= */}
 
-      <aside className="sidebar">
+      <aside className={`sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
+
+        <button
+          type="button"
+          className="sidebar-toggle"
+          onClick={() => setSidebarCollapsed((prev) => !prev)}
+          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}
+        >
+          {sidebarCollapsed ? (
+            <PanelLeftOpen size={17} />
+          ) : (
+            <PanelLeftClose size={17} />
+          )}
+        </button>
 
         <div className="brand">
           <div className="brand-mark">
@@ -4550,7 +7533,7 @@ return (
   </button>
 
 
-  {/* HACKATHONS */}
+  {/* HACKATHONS & EVENTS */}
   <button
     className={
       activeNav === "hackathons"
@@ -4560,35 +7543,7 @@ return (
     onClick={() => handleNavigation("hackathons")}
   >
     <Trophy size={18} />
-    <span>Hackathons</span>
-  </button>
-
-
-  {/* COMMUNITY */}
-  <button
-    className={
-      activeNav === "community"
-        ? "nav-item active"
-        : "nav-item"
-    }
-    onClick={() => handleNavigation("community")}
-  >
-    <Users size={18} />
-    <span>Community</span>
-  </button>
-
-
-  {/* EVENTS */}
-  <button
-    className={
-      activeNav === "events"
-        ? "nav-item active"
-        : "nav-item"
-    }
-    onClick={() => handleNavigation("events")}
-  >
-    <CalendarDays size={18} />
-    <span>Events</span>
+    <span>Hackathons &amp; Events</span>
   </button>
 
 
@@ -4606,7 +7561,41 @@ return (
   </button>
 
 
-  {/* RESOURCES */}
+  {/* MESSAGES */}
+  <button
+    className={
+      activeNav === "messages"
+        ? "nav-item active"
+        : "nav-item"
+    }
+    onClick={() => handleNavigation("messages")}
+  >
+    <MessageCircle size={18} />
+    <span>Messages</span>
+    {directConversations.reduce(
+      (total, conversation) =>
+        total + Number(conversation.unreadCounts?.[authUser?.uid] || 0),
+      0
+    ) > 0 && (
+      <span className="nav-unread-badge">
+        {Math.min(
+          99,
+          directConversations.reduce(
+            (total, conversation) =>
+              total + Number(conversation.unreadCounts?.[authUser?.uid] || 0),
+            0
+          )
+        )}{directConversations.reduce(
+          (total, conversation) =>
+            total + Number(conversation.unreadCounts?.[authUser?.uid] || 0),
+          0
+        ) > 99 ? "+" : ""}
+      </span>
+    )}
+  </button>
+
+
+  {/* CAMPUS HUB */}
   <button
     className={
       activeNav === "resources"
@@ -4616,7 +7605,7 @@ return (
     onClick={() => handleNavigation("resources")}
   >
     <BookOpen size={18} />
-    <span>Resources</span>
+    <span>Campus Hub</span>
   </button>
 
 
@@ -5778,7 +8767,7 @@ return (
               )}
 
               {(searchCategory === "hackathons" || searchCategory === "all") &&
-                filteredHackathons.map((hackathon) => {
+                filteredSearchHackathons.map((hackathon) => {
                   const Icon = getDataIcon(hackathon.icon, Trophy);
                   return (
                     <button
@@ -5800,7 +8789,7 @@ return (
                   );
                 })}
 
-              {searchCategory === "hackathons" && filteredHackathons.length === 0 && (
+              {searchCategory === "hackathons" && filteredSearchHackathons.length === 0 && (
                 <div className="search-empty">No hackathons found</div>
               )}
 
@@ -5833,7 +8822,7 @@ return (
 
               {searchCategory === "all" &&
                 filteredTeammates.length === 0 &&
-                filteredHackathons.length === 0 &&
+                filteredSearchHackathons.length === 0 &&
                 filteredEvents.length === 0 && (
                   <div className="search-empty">No results found</div>
                 )}
@@ -5901,7 +8890,7 @@ return (
                   onClick={() => handleNavigation("hackathons")}
                 >
                   <Trophy size={17} />
-                  Explore Hackathons
+                  Hackathons &amp; Events
                 </button>
 
               </div>
@@ -6021,14 +9010,520 @@ return (
             </div>
           )}
 
+          {/* HACKATHONS */}
+
+          <section
+            className="lower-section"
+            id="hackathons"
+          >
+
+            <div className="section-heading">
+
+              <span className="eyebrow">
+                OPPORTUNITIES
+              </span>
+
+              <h2>
+                Discover Opportunities
+              </h2>
+
+              <p>
+                Live registration opportunities from the CIT Competition Dashboard.
+                Expired registrations are automatically removed from this active view.
+              </p>
+
+            </div>
+
+            <div className="opportunity-toolbar">
+              <div className="opportunity-search">
+                <Search size={15} />
+                <input
+                  type="search"
+                  value={opportunitySearch}
+                  onChange={(event) => {
+                    setOpportunitySearch(event.target.value);
+                    setShowAllOpportunities(false);
+                  }}
+                  placeholder="Search competitions, organizers, categories..."
+                  aria-label="Search opportunities"
+                />
+                {opportunitySearch && (
+                  <button
+                    type="button"
+                    onClick={() => setOpportunitySearch("")}
+                    aria-label="Clear opportunity search"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
+              <StyledSelect
+                value={
+                  opportunitySort === "deadline"
+                    ? "Deadline soonest"
+                    : opportunitySort === "name"
+                    ? "Name A–Z"
+                    : "Prize / value"
+                }
+                options={["Deadline soonest", "Name A–Z", "Prize / value"]}
+                onChange={(value) =>
+                  setOpportunitySort(
+                    value === "Name A–Z"
+                      ? "name"
+                      : value === "Prize / value"
+                      ? "prize"
+                      : "deadline"
+                  )
+                }
+                ariaLabel="Sort opportunities"
+              />
+            </div>
+
+            {/* LIVE HACKATHON FILTERS */}
+            {(hackathonFilterOptions.categories.length > 0 ||
+              hackathonFilterOptions.departments.length > 0 ||
+              hackathonFilterOptions.years.length > 0) && (
+              <div className="opportunity-filters">
+                <select value={hackathonCategoryFilter} onChange={(event) => setHackathonCategoryFilter(event.target.value)}>
+                  <option value="">All categories</option>
+                  {hackathonFilterOptions.categories.map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+                <select value={hackathonDepartmentFilter} onChange={(event) => setHackathonDepartmentFilter(event.target.value)}>
+                  <option value="">All departments</option>
+                  {hackathonFilterOptions.departments.map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+                <select value={hackathonYearFilter} onChange={(event) => setHackathonYearFilter(event.target.value)}>
+                  <option value="">All years</option>
+                  {hackathonFilterOptions.years.map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+              </div>
+            )}
+
+            <div className="opportunity-summary">
+              <div>
+                <strong>{showAllCompetitions ? filteredAllCompetitionHackathons.length : filteredOpportunityHackathons.length}</strong>
+                <span>{showAllCompetitions ? " competitions shown" : " active registrations"}</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                {showAllCompetitions && (
+                  <span style={{ fontSize: "11px", opacity: 0.72 }}>
+                    Total {allCompetitions.length} · Active {activeCompetitionCount} · Closed {closedCompetitionCount}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={toggleAllCompetitionsView}
+                  disabled={allCompetitionsLoading}
+                >
+                  {allCompetitionsLoading
+                    ? "Loading competitions…"
+                    : showAllCompetitions
+                    ? "Show Active Registrations"
+                    : allCompetitions.length
+                    ? `View All ${allCompetitions.length} Competitions`
+                    : "View All Competitions"}
+                </button>
+                <a href={COMPETITION_SHEET_URL} target="_blank" rel="noopener noreferrer">
+                  View source dashboard <ExternalLink size={12} />
+                </a>
+              </div>
+            </div>
+
+            {!showAllCompetitions && closingSoonOpportunities.length > 0 && (
+              <div className="opportunity-closing-soon">
+                <div className="opportunity-closing-heading">
+                  <div>
+                    <span className="eyebrow">CLOSING SOON</span>
+                    <strong>Registration closes within 7 days</strong>
+                  </div>
+                  <span>{closingSoonOpportunities.length}</span>
+                </div>
+                <div className="opportunity-closing-list">
+                  {closingSoonOpportunities.slice(0, 4).map((item) => (
+                    <button
+                      type="button"
+                      key={`closing-${item.id}`}
+                      onClick={() => setSelectedHackathon(item)}
+                    >
+                      <span>{item.name}</span>
+                      <strong>
+                        {item.daysRemaining === 0
+                          ? "Today"
+                          : `${item.daysRemaining}d left`}
+                      </strong>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* SAVED INTERESTS */}
+            <div
+              style={{
+                margin: "0 0 24px",
+                padding: "14px 16px",
+                border: "1px solid rgba(139, 92, 246, 0.22)",
+                borderRadius: "14px",
+                background: "rgba(139, 92, 246, 0.055)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "12px",
+                  marginBottom: hackathonInterestIds.size ? "12px" : "0",
+                }}
+              >
+                <div>
+                  <strong style={{ display: "block", fontSize: "14px" }}>
+                    ⭐ Your Saved Interests
+                  </strong>
+                  <span style={{ fontSize: "11px", opacity: 0.68 }}>
+                    Hackathons you've saved with the star
+                  </span>
+                </div>
+                <span style={{ fontSize: "12px", fontWeight: 700, opacity: 0.8 }}>
+                  {hackathonInterestIds.size} saved
+                </span>
+              </div>
+
+              {hackathonInterestIds.size === 0 ? (
+                <div style={{ fontSize: "12px", opacity: 0.62 }}>
+                  No saved hackathons yet. Tap the ☆ star on a challenge to save it.
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "9px",
+                  }}
+                >
+                  {hackathons
+                    .filter((hackathon) => hackathonInterestIds.has(hackathon.id))
+                    .map((hackathon) => (
+                      <button
+                        key={`saved-${hackathon.id}`}
+                        type="button"
+                        onClick={() => setSelectedHackathon(hackathon)}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "7px",
+                          padding: "8px 11px",
+                          borderRadius: "9px",
+                          border: "1px solid rgba(139, 92, 246, 0.28)",
+                          background: "rgba(255, 255, 255, 0.035)",
+                          color: "inherit",
+                          cursor: "pointer",
+                          fontSize: "11px",
+                          fontWeight: 600,
+                        }}
+                      >
+                        <Trophy size={13} />
+                        {hackathon.name || "Hackathon"}
+                      </button>
+                    ))}
+                </div>
+              )}
+            </div>
+
+            <div className="event-grid">
+
+              {displayedCompetitionList.length === 0 && !dataLoading && !allCompetitionsLoading && (
+                <div className="search-empty">
+                  {dataError || "No hackathons available yet."}
+                </div>
+              )}
+
+              {visibleOpportunityHackathons.map((hackathon) => {
+                const Icon = getDataIcon(hackathon.icon, Trophy);
+
+                return (
+                  <div className="event-card" key={hackathon.id}>
+
+                    <div className="event-icon">
+                      <Icon size={21} />
+                    </div>
+
+                    <button
+                      type="button"
+                      className={`opportunity-favorite-button ${hackathonInterestIds.has(hackathon.id) ? "is-saved" : ""}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleHackathonInterest(hackathon);
+                      }}
+                      disabled={hackathonInterestLoading}
+                      aria-label={
+                        hackathonInterestIds.has(hackathon.id)
+                          ? `Remove ${hackathon.name || "hackathon"} from saved opportunities`
+                          : `Save ${hackathon.name || "hackathon"}`
+                      }
+                      title={hackathonInterestIds.has(hackathon.id) ? "Remove from saved" : "Save opportunity"}
+                    >
+                      <Star size={16} fill={hackathonInterestIds.has(hackathon.id) ? "currentColor" : "none"} />
+                    </button>
+
+                    <div>
+                      <span className="event-date">
+                        {hackathon.date || "DATE TBA"}
+                      </span>
+                      {showAllCompetitions && !hackathon.activeForRegistration && (
+                        <span style={{ display: "inline-flex", width: "fit-content", marginTop: "6px", padding: "4px 7px", borderRadius: "6px", fontSize: "9px", fontWeight: 800, textTransform: "uppercase", border: "1px solid rgba(248, 113, 113, 0.25)", background: "rgba(248, 113, 113, 0.08)", color: "inherit" }}>
+                          Registration Closed
+                        </span>
+                      )}
+
+                      <h3>
+                        {hackathon.name || "Untitled Hackathon"}
+                      </h3>
+
+                      <p>
+                        {hackathon.description || "Competition details will be announced soon."}
+                      </p>
+
+                      <div className="opportunity-card-meta">
+                        {hackathon.eligibleYear && <span>{hackathon.eligibleYear}</span>}
+                        {hackathon.category && <span>{hackathon.category}</span>}
+                        {hackathon.prizeAmount && <span>{hackathon.prizeAmount}</span>}
+                      </div>
+
+                      <div className="opportunity-card-deadline">
+                        <Clock3 size={12} />
+                        {!hackathon.activeForRegistration
+                          ? "Registration Closed"
+                          : hackathon.daysRemaining === 0
+                          ? "Registration closes today"
+                          : `Registration closes ${formatOpportunityDate(hackathon.registrationDeadline)}`}
+                      </div>
+                    </div>
+
+                    <div className="event-card-actions">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedHackathon(hackathon)}
+                      >
+                        View Challenge
+                      </button>
+                    </div>
+
+                  </div>
+                );
+              })}
+
+            </div>
+
+            {(
+              showAllCompetitions
+                ? visibleOpportunityHackathons.length < displayedCompetitionList.length
+                : filteredOpportunityHackathons.length > 12
+            ) && (
+              <div className="opportunity-show-more-wrap">
+                <span>
+                  Showing {visibleOpportunityHackathons.length} of{" "}
+                  {showAllCompetitions
+                    ? displayedCompetitionList.length
+                    : filteredOpportunityHackathons.length}
+                </span>
+
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    if (showAllCompetitions) {
+                      setAllCompetitionVisibleCount((prev) =>
+                        Math.min(
+                          prev + 10,
+                          displayedCompetitionList.length
+                        )
+                      );
+                    } else {
+                      setShowAllOpportunities((prev) => !prev);
+                    }
+                  }}
+                >
+                  {showAllCompetitions
+                    ? `Show ${Math.min(
+                        10,
+                        displayedCompetitionList.length -
+                          visibleOpportunityHackathons.length
+                      )} More`
+                    : showAllOpportunities
+                    ? "Show Less"
+                    : "Show More"}
+
+                  <ChevronDown
+                    size={14}
+                    style={{
+                      transform:
+                        !showAllCompetitions && showAllOpportunities
+                          ? "rotate(180deg)"
+                          : "none",
+                    }}
+                  />
+                </button>
+              </div>
+            )}
+
+          </section>
+
+
+          {/* EVENTS */}
+
+          <section
+            className="lower-section events-subsection"
+            id="events"
+          >
+
+            <div className="section-heading">
+
+              <span className="eyebrow">
+                CAMPUS LIFE
+              </span>
+
+              <h2>
+                Upcoming Events
+              </h2>
+
+            </div>
+
+
+            <div className="simple-events">
+
+              {upcomingEventsList.length === 0 && !dataLoading && (
+                <div className="search-empty">
+                  {dataError || "No upcoming events available yet."}
+                </div>
+              )}
+
+              {upcomingEventsList.map((event) => {
+                const Icon = getDataIcon(event.icon, CalendarDays);
+
+                return (
+                  <div
+                    className="simple-event"
+                    key={event.id}
+                    onClick={() => setSelectedEvent(event)}
+                  >
+                    <Icon size={21} />
+                    <div>
+                      <strong>{event.title || event.name || "Campus Event"}</strong>
+                      <span>
+                        {event.date || "Date TBA"}
+                        {event.time ? ` • ${event.time}` : ""}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className={`event-favorite-button ${eventInterestIds.has(event.id) ? "is-saved" : ""}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleEventInterest(event);
+                      }}
+                      disabled={eventInterestLoading}
+                      aria-label={
+                        eventInterestIds.has(event.id)
+                          ? `Remove ${event.title || event.name || "event"} from saved events`
+                          : `Save ${event.title || event.name || "event"}`
+                      }
+                      title={eventInterestIds.has(event.id) ? "Remove from saved" : "Save event"}
+                    >
+                      <Star size={16} fill={eventInterestIds.has(event.id) ? "currentColor" : "none"} />
+                    </button>
+                    <Clock3 size={17} />
+                  </div>
+                );
+              })}
+
+            </div>
+
+            {/* SAVED EVENT INTERESTS */}
+            <div
+              style={{
+                margin: "22px 0 0",
+                padding: "14px 16px",
+                border: "1px solid rgba(139, 92, 246, 0.22)",
+                borderRadius: "14px",
+                background: "rgba(139, 92, 246, 0.055)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "12px",
+                  marginBottom: eventInterestIds.size ? "12px" : "0",
+                }}
+              >
+                <div>
+                  <strong style={{ display: "block", fontSize: "14px" }}>
+                    ⭐ Your Saved Events
+                  </strong>
+                  <span style={{ fontSize: "11px", opacity: 0.68 }}>
+                    Events you've saved with the star
+                  </span>
+                </div>
+                <span style={{ fontSize: "12px", fontWeight: 700, opacity: 0.8 }}>
+                  {eventInterestIds.size} saved
+                </span>
+              </div>
+
+              {eventInterestIds.size === 0 ? (
+                <div style={{ fontSize: "12px", opacity: 0.62 }}>
+                  No saved events yet. Tap the ☆ star on an event to save it.
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "9px",
+                  }}
+                >
+                  {events
+                    .filter((event) => eventInterestIds.has(event.id))
+                    .map((event) => (
+                      <button
+                        key={`saved-event-${event.id}`}
+                        type="button"
+                        onClick={() => setSelectedEvent(event)}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "7px",
+                          padding: "8px 11px",
+                          borderRadius: "9px",
+                          border: "1px solid rgba(139, 92, 246, 0.28)",
+                          background: "rgba(255, 255, 255, 0.035)",
+                          color: "inherit",
+                          cursor: "pointer",
+                          fontSize: "11px",
+                          fontWeight: 600,
+                        }}
+                      >
+                        <CalendarDays size={13} />
+                        {event.title || event.name || "Campus Event"}
+                      </button>
+                    ))}
+                </div>
+              )}
+            </div>
+
+          </section>
+
           {/* CREATE TEAM */}
 
-          <section className="create-team-card">
+          <section className="create-team-card teams-create-section" id="teams">
 
             <div className="section-heading centered">
 
               <span className="eyebrow">
-                BUILD YOUR TEAM
+                TEAMS
               </span>
 
               <h2>
@@ -6165,7 +9660,7 @@ return (
 
           {/* TEAMS */}
 
-          <section className="lower-section teams-section" id="teams">
+          <section className="lower-section teams-section" id="team-community">
             <div className="teams-hero-heading">
               <span className="eyebrow">COLLABORATE</span>
               <h2>Build. Connect. Collaborate.</h2>
@@ -6186,7 +9681,7 @@ return (
                   type="text"
                   value={teamSearchId}
                   onChange={(e) => setTeamSearchId(e.target.value.replace(/[^a-z0-9]/gi, "").slice(0, 8))}
-                  placeholder="KHDKJDHJ"
+                  placeholder="e.g. 7F3K9P2Q"
                   maxLength={8}
                   aria-label="Team ID suffix"
                 />
@@ -6384,358 +9879,193 @@ return (
             </div>
           </section>
 
-          {/* HACKATHONS */}
 
-          <section
-            className="lower-section"
-            id="hackathons"
-          >
 
-            <div className="section-heading">
+          {/* ================= DIRECT MESSAGES ================= */}
 
-              <span className="eyebrow">
-                DISCOVER
-              </span>
-
-              <h2>
-                Upcoming Hackathons
-              </h2>
-
-            </div>
-
-            {/* SAVED INTERESTS */}
-            <div
-              style={{
-                margin: "0 0 24px",
-                padding: "14px 16px",
-                border: "1px solid rgba(139, 92, 246, 0.22)",
-                borderRadius: "14px",
-                background: "rgba(139, 92, 246, 0.055)",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "12px",
-                  marginBottom: hackathonInterestIds.size ? "12px" : "0",
-                }}
-              >
-                <div>
-                  <strong style={{ display: "block", fontSize: "14px" }}>
-                    ⭐ Your Saved Interests
-                  </strong>
-                  <span style={{ fontSize: "11px", opacity: 0.68 }}>
-                    Hackathons you've marked as interested in
-                  </span>
-                </div>
-                <span style={{ fontSize: "12px", fontWeight: 700, opacity: 0.8 }}>
-                  {hackathonInterestIds.size} saved
-                </span>
+          <section className="lower-section messages-section" id="messages">
+            <div className="messages-section-heading">
+              <div>
+                <span className="eyebrow">DIRECT MESSAGES</span>
+                <h2>Messages</h2>
+                <p>Have private conversations with students you connect with.</p>
               </div>
-
-              {hackathonInterestIds.size === 0 ? (
-                <div style={{ fontSize: "12px", opacity: 0.62 }}>
-                  No saved hackathons yet. Open a challenge and click ⭐ I'm Interested.
-                </div>
-              ) : (
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: "9px",
-                  }}
-                >
-                  {hackathons
-                    .filter((hackathon) => hackathonInterestIds.has(hackathon.id))
-                    .map((hackathon) => (
-                      <button
-                        key={`saved-${hackathon.id}`}
-                        type="button"
-                        onClick={() => setSelectedHackathon(hackathon)}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "7px",
-                          padding: "8px 11px",
-                          borderRadius: "9px",
-                          border: "1px solid rgba(139, 92, 246, 0.28)",
-                          background: "rgba(255, 255, 255, 0.035)",
-                          color: "inherit",
-                          cursor: "pointer",
-                          fontSize: "11px",
-                          fontWeight: 600,
-                        }}
-                      >
-                        <Trophy size={13} />
-                        {hackathon.name || "Hackathon"}
-                      </button>
-                    ))}
-                </div>
-              )}
             </div>
 
-            <div className="event-grid">
-
-              {hackathons.length === 0 && !dataLoading && (
-                <div className="search-empty">
-                  {dataError || "No hackathons available yet."}
-                </div>
-              )}
-
-              {hackathons.map((hackathon) => {
-                const Icon = getDataIcon(hackathon.icon, Trophy);
-
-                return (
-                  <div className="event-card" key={hackathon.id}>
-
-                    <div className="event-icon">
-                      <Icon size={21} />
-                    </div>
-
-                    <div>
-                      <span className="event-date">
-                        {hackathon.date || "DATE TBA"}
-                      </span>
-
-                      <h3>
-                        {hackathon.name || "Untitled Hackathon"}
-                      </h3>
-
-                      <p>
-                        {hackathon.description || "Hackathon details will be announced soon."}
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => setSelectedHackathon(hackathon)}
-                    >
-                      View Challenge
-                    </button>
-
+            <div className="messages-workspace">
+              <aside className="messages-conversation-panel">
+                <div className="messages-panel-header">
+                  <div>
+                    <strong>Conversations</strong>
+                    <span>{directConversations.length} active</span>
                   </div>
-                );
-              })}
-
-            </div>
-
-          </section>
-
-
-          {/* EVENTS */}
- {/* TEAMMATES */}
-
-          <section
-            className="teammates-section"
-            id="community"
-          >
-
-            <div className="section-heading">
-
-              <span className="eyebrow">
-                FIND YOUR TEAM
-              </span>
-
-              <h2>
-                Meet Your Future Hackathon Teammates
-              </h2>
-
-              <p>
-                Discover students with different skills
-                and connect with the right people for your idea.
-              </p>
-
-            </div>
-
-
-            <div className="teammate-grid">
-
-              {teammates.length === 0 && !dataLoading && (
-                <div className="search-empty">
-                  {dataError || "No other students have joined yet."}
                 </div>
-              )}
 
-              {teammates.map((person) => {
-                const Icon = person.icon || Code2;
+                <div className="messages-conversation-list">
+                  {directConversationsLoading ? (
+                    <div className="messages-empty-state">Loading conversations...</div>
+                  ) : directConversations.length === 0 ? (
+                    <div className="messages-empty-state">
+                      <MessageCircle size={22} />
+                      <strong>No conversations yet</strong>
+                      <span>Use Find Teammates and choose Message on a student profile.</span>
+                    </div>
+                  ) : (
+                    directConversations.map((conversation) => {
+                      const other = getDirectOtherParticipant(conversation);
+                      const active = directConversation?.id === conversation.id;
 
-                return (
-                  <div
-                    className="teammate-card"
-                    key={person.id || person.email || person.name}
-                  >
+                      return (
+                        <button
+                          type="button"
+                          key={conversation.id}
+                          className={`direct-conversation-item ${active ? "active" : ""}`}
+                          onClick={async () => {
+                            setDirectConversation(conversation);
+                            if (authUser?.uid) {
+                              try {
+                                await updateDoc(
+                                  doc(db, "directConversations", conversation.id),
+                                  {
+                                    [`unreadCounts.${authUser.uid}`]: 0,
+                                    [`lastReadAt.${authUser.uid}`]: serverTimestamp(),
+                                  }
+                                );
+                              } catch (error) {
+                                console.error("DIRECT MESSAGE READ UPDATE ERROR:", error);
+                              }
+                            }
+                          }}
+                        >
+                          <div className="direct-conversation-avatar">
+                            {(other?.name || "C").charAt(0).toUpperCase()}
+                          </div>
+                          <div className="direct-conversation-copy">
+                            <strong>{other?.name || "CIT Student"}</strong>
+                            <span>{conversation.lastMessage || "Start a conversation"}</span>
+                          </div>
+                          {Number(conversation.unreadCounts?.[authUser?.uid] || 0) > 0 && (
+                            <span className="direct-unread-badge">
+                              {conversation.unreadCounts[authUser.uid] > 99
+                                ? "99+"
+                                : conversation.unreadCounts[authUser.uid]}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </aside>
 
-                    <div className="teammate-top">
-
-                      <div className="person-avatar">
-                        {person.name.charAt(0).toUpperCase()}
+              <div className="direct-chat-panel">
+                {!directConversation ? (
+                  <div className="direct-chat-empty">
+                    <div className="direct-chat-empty-icon"><MessageCircle size={24} /></div>
+                    <h3>Select a conversation</h3>
+                    <p>Your one-to-one student messages will appear here.</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="direct-chat-header">
+                      <div className="direct-chat-person">
+                        <div className="direct-conversation-avatar">
+                          {(getDirectOtherParticipant(directConversation)?.name || "C").charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <strong>{getDirectOtherParticipant(directConversation)?.name || "CIT Student"}</strong>
+                          <span>CampusConnect student</span>
+                        </div>
                       </div>
-
-                      <div className="person-info">
-                        <h3>{person.name}</h3>
-                        <span>
-                          {person.campusConnectId || "CampusConnect ID pending"}
-                          {person.role ? ` • ${person.role}` : ""}
-                        </span>
-                      </div>
-
-                      <span className="availability">
-                        {person.status || "Available"}
-                      </span>
-
+                      <button type="button" className="messages-close-conversation" onClick={closeDirectConversation} aria-label="Close conversation">
+                        <X size={16} />
+                      </button>
                     </div>
 
-                    <div className="person-skills">
-                      {person.skills.length > 0 ? (
-                        person.skills.map((skill) => (
-                          <span key={skill}>{skill}</span>
-                        ))
+                    <div className="direct-chat-messages">
+                      {directMessagesLoading ? (
+                        <div className="messages-empty-state">Loading messages...</div>
+                      ) : directMessages.length === 0 ? (
+                        <div className="direct-chat-start-state">
+                          <strong>Start the conversation</strong>
+                          <span>Send a message to begin.</span>
+                        </div>
                       ) : (
-                        <span>No skills added</span>
+                        directMessages.map((message) => {
+                          const own = message.senderId === authUser?.uid;
+                          return (
+                            <div className={`direct-message-row ${own ? "own" : ""}`} key={message.id}>
+                              <div className="direct-message-content-wrap">
+                                <div className="direct-message-bubble">
+                                  {message.message}
+                                </div>
+
+                                {!own && (
+                                  <div className="direct-message-menu-wrap">
+                                    <button
+                                      type="button"
+                                      className="direct-message-menu-button"
+                                      onClick={() =>
+                                        setDirectMessageMenu((current) =>
+                                          current === message.id ? null : message.id
+                                        )
+                                      }
+                                      aria-label="Message options"
+                                    >
+                                      <MoreVertical size={14} />
+                                    </button>
+
+                                    {directMessageMenu === message.id && (
+                                      <div className="direct-message-menu">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setDirectMessageReportReason("");
+                                            setDirectMessageReportDescription("");
+                                            setDirectMessageReportTarget(message);
+                                            setDirectMessageMenu(null);
+                                          }}
+                                        >
+                                          <Flag size={13} />
+                                          Report message
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })
                       )}
+                      <div ref={directMessagesEndRef} />
                     </div>
 
-                    <button
-                      className="connect-button"
-                      onClick={() => setSelectedStudent(person)}
+                    <form
+                      className="direct-chat-composer"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        sendDirectMessage();
+                      }}
                     >
-                      <Icon size={16} />
-                      Connect
-                    </button>
-
-                  </div>
-                );
-              })}
-
-            </div>
-          </section>
-          <section
-            className="lower-section"
-            id="events"
-          >
-
-            <div className="section-heading">
-
-              <span className="eyebrow">
-                CAMPUS LIFE
-              </span>
-
-              <h2>
-                Upcoming Events
-              </h2>
-
-            </div>
-
-
-            <div className="simple-events">
-
-              {upcomingEventsList.length === 0 && !dataLoading && (
-                <div className="search-empty">
-                  {dataError || "No upcoming events available yet."}
-                </div>
-              )}
-
-              {upcomingEventsList.map((event) => {
-                const Icon = getDataIcon(event.icon, CalendarDays);
-
-                return (
-                  <div
-                    className="simple-event"
-                    key={event.id}
-                    onClick={() => setSelectedEvent(event)}
-                  >
-                    <Icon size={21} />
-                    <div>
-                      <strong>{event.title || event.name || "Campus Event"}</strong>
-                      <span>
-                        {event.date || "Date TBA"}
-                        {event.time ? ` • ${event.time}` : ""}
-                      </span>
-                    </div>
-                    <Clock3 size={17} />
-                  </div>
-                );
-              })}
-
-            </div>
-
-            {/* SAVED EVENT INTERESTS */}
-            <div
-              style={{
-                margin: "22px 0 0",
-                padding: "14px 16px",
-                border: "1px solid rgba(139, 92, 246, 0.22)",
-                borderRadius: "14px",
-                background: "rgba(139, 92, 246, 0.055)",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "12px",
-                  marginBottom: eventInterestIds.size ? "12px" : "0",
-                }}
-              >
-                <div>
-                  <strong style={{ display: "block", fontSize: "14px" }}>
-                    ⭐ Your Saved Events
-                  </strong>
-                  <span style={{ fontSize: "11px", opacity: 0.68 }}>
-                    Events you've marked as interested in
-                  </span>
-                </div>
-                <span style={{ fontSize: "12px", fontWeight: 700, opacity: 0.8 }}>
-                  {eventInterestIds.size} saved
-                </span>
-              </div>
-
-              {eventInterestIds.size === 0 ? (
-                <div style={{ fontSize: "12px", opacity: 0.62 }}>
-                  No saved events yet. Open an event and click ⭐ I'm Interested.
-                </div>
-              ) : (
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: "9px",
-                  }}
-                >
-                  {events
-                    .filter((event) => eventInterestIds.has(event.id))
-                    .map((event) => (
-                      <button
-                        key={`saved-event-${event.id}`}
-                        type="button"
-                        onClick={() => setSelectedEvent(event)}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "7px",
-                          padding: "8px 11px",
-                          borderRadius: "9px",
-                          border: "1px solid rgba(139, 92, 246, 0.28)",
-                          background: "rgba(255, 255, 255, 0.035)",
-                          color: "inherit",
-                          cursor: "pointer",
-                          fontSize: "11px",
-                          fontWeight: 600,
-                        }}
-                      >
-                        <CalendarDays size={13} />
-                        {event.title || event.name || "Campus Event"}
+                      <input
+                        type="text"
+                        value={directMessageInput}
+                        onChange={(event) => setDirectMessageInput(event.target.value)}
+                        placeholder="Write a message..."
+                        maxLength={2000}
+                        disabled={directMessageSending}
+                      />
+                      <button type="submit" className="primary-button" disabled={directMessageSending || !directMessageInput.trim()}>
+                        <Send size={15} />
+                        {directMessageSending ? "Sending..." : "Send"}
                       </button>
-                    ))}
-                </div>
-              )}
+                    </form>
+                  </>
+                )}
+              </div>
             </div>
-
           </section>
-
 {/* ================= RESOURCES ================= */}
 
 <section
@@ -6802,11 +10132,11 @@ return (
     </div>
 
     <div className="resource-content">
-      <h3>Exchange</h3>
+      <h3>Trade or Give</h3>
 
       <p>
-        Trade books, project resources, and other
-        useful items directly with other students.
+        Trade useful items with another student or give
+        something away for free.
       </p>
 
      <button
@@ -6816,7 +10146,7 @@ return (
     setExchangeOpen(true);
   }}
 >
-  Find Exchanges
+  Browse Trade or Give
 </button>
     </div>
   </div>
@@ -7136,273 +10466,671 @@ return (
   </div>
 </section>
 {marketplaceOpen && (
-  <div
-    className="exchange-modal-overlay"
-    style={{
-      position: "fixed",
-      inset: 0,
-      zIndex: 99999,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      background: "rgba(0, 0, 0,0.75)",
-    }}
-  >
-    <div className="exchange-modal">
-
-      <div className="exchange-modal-header">
+  <div className="exchange-modal-overlay">
+    <div className="exchange-modal marketplace-modal">
+      <div className="exchange-modal-header marketplace-modal-header">
         <div>
-          <span className="community-resource-category">
-            STUDENT MARKETPLACE
-          </span>
-
+          <span className="community-resource-category">STUDENT MARKETPLACE</span>
           <h3>Buy & Sell</h3>
+          <p className="marketplace-modal-subtitle">
+            Real student listings from Firestore. Meet on campus and choose Cash or Online payment.
+          </p>
         </div>
 
         <button
           type="button"
           className="exchange-modal-close"
-          onClick={() => setMarketplaceOpen(false)}
+          onClick={() => {
+            setMarketplaceOpen(false);
+            setMarketplaceCreateOpen(false);
+          }}
           aria-label="Close marketplace"
         >
           <X size={18} />
         </button>
       </div>
 
-      <div className="exchange-listings">
+      <div className="marketplace-toolbar">
+        <div>
+          <strong>{marketplaceListings.length}</strong>
+          <span>active listings</span>
+        </div>
+        <button
+          type="button"
+          className="marketplace-primary-button"
+          onClick={() => {
+            resetMarketplaceForm();
+            setMarketplaceCreateOpen(true);
+          }}
+        >
+          <Plus size={16} />
+          Sell an Item
+        </button>
+      </div>
 
-        <div className="exchange-listing-card">
-          <div>
-            <span className="exchange-listing-category">
-              TEXTBOOK
-            </span>
+      {marketplaceError && (
+        <div className="marketplace-inline-error">{marketplaceError}</div>
+      )}
 
-            <h4>Engineering Mathematics Book</h4>
+      {marketplaceLoading ? (
+        <div className="marketplace-empty-state">Loading live marketplace listings...</div>
+      ) : marketplaceListings.length === 0 ? (
+        <div className="marketplace-empty-state">
+          <ShoppingBag size={26} />
+          <strong>No listings yet</strong>
+          <span>Be the first student to list an item.</span>
+        </div>
+      ) : (
+        <div className="marketplace-listings-grid">
+          {marketplaceListings
+            .filter((listing) => listing.listingType !== "auction")
+            .map((listing) => (
+              <div className="marketplace-product-card" key={listing.id}>
+                <div className="marketplace-product-image-wrap">
+                  {listing.imageThumbnails?.[0] || listing.imageUrls?.[0] ? (
+                    <img
+                      src={listing.imageThumbnails?.[0] || listing.imageUrls?.[0]}
+                      alt={listing.title}
+                      className="marketplace-product-image"
+                    />
+                  ) : (
+                    <div className="marketplace-product-image-placeholder"><ShoppingBag size={25} /></div>
+                  )}
+                  <span className="marketplace-type-badge">{listing.category || "OTHER"}</span>
+                </div>
 
-            <p>
-              Used textbook in good condition.
-            </p>
+                <div className="marketplace-product-body">
+                  <div className="marketplace-product-topline">
+                    <span>{listing.condition || "Used"}</span>
+                    <strong>₹{Number(listing.price || 0).toLocaleString("en-IN")}</strong>
+                  </div>
+                  <h4>{listing.title}</h4>
+                  <p>{listing.description}</p>
+                  <div className="marketplace-seller-row">
+                    <span>Seller</span>
+                    <strong>{listing.sellerName || "CIT Student"}</strong>
+                  </div>
+                  <div className="marketplace-meta-row">
+                    <span>{listing.handoverLocation || "CIT Campus"}</span>
+                    <span>{(listing.paymentMethods || []).map((method) => method === "online" ? "Online" : "Cash").join(" · ")}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+        </div>
+      )}
+
+      {marketplaceListings.some((listing) => listing.listingType === "auction") && (
+        <div className="marketplace-auction-preview">
+          <div className="marketplace-subsection-heading">
+            <div>
+              <span className="community-resource-category">AUCTIONS</span>
+              <h4>Live student auctions</h4>
+            </div>
+            <button type="button" onClick={() => setBiddingOpen(true)}>View All</button>
           </div>
 
-          <strong>₹450</strong>
+          {marketplaceListings
+            .filter((listing) => listing.listingType === "auction")
+            .slice(0, 3)
+            .map((listing) => {
+              const end = listing.auctionEndAt?.toDate?.() || new Date(listing.auctionEndAt);
+              const ended = !end || Number.isNaN(end.getTime()) || end <= new Date();
+              return (
+                <div className="marketplace-auction-row" key={listing.id}>
+                  <div className="marketplace-auction-thumb">
+                    {listing.imageThumbnails?.[0] || listing.imageUrls?.[0] ? (
+                      <img src={listing.imageThumbnails?.[0] || listing.imageUrls?.[0]} alt="" />
+                    ) : <Gavel size={18} />}
+                  </div>
+                  <div className="marketplace-auction-info">
+                    <strong>{listing.title}</strong>
+                    <span>{ended ? "Auction ended" : `Current bid ₹${Number(listing.currentPrice || listing.startingPrice || 0).toLocaleString("en-IN")}`}</span>
+                  </div>
+                  <button type="button" onClick={() => setBiddingOpen(true)}>Bid</button>
+                </div>
+              );
+            })}
+        </div>
+      )}
+    </div>
+  </div>
+)}
+
+{marketplaceCreateOpen && (
+  <div className="exchange-modal-overlay marketplace-create-overlay">
+    <div className="exchange-modal marketplace-create-modal">
+      <div className="exchange-modal-header">
+        <div>
+          <span className="community-resource-category">CREATE LISTING</span>
+          <h3>Sell an Item</h3>
+          <p className="marketplace-modal-subtitle">Add real product details so another student can buy it safely on campus.</p>
+        </div>
+        <button type="button" className="exchange-modal-close" onClick={() => setMarketplaceCreateOpen(false)} aria-label="Close create listing">
+          <X size={18} />
+        </button>
+      </div>
+
+      <div className="marketplace-form">
+        <label>
+          Product title
+          <input value={marketplaceForm.title} onChange={(e) => handleMarketplaceFormChange("title", e.target.value)} placeholder="e.g. Arduino Uno Starter Kit" maxLength={120} />
+        </label>
+
+        <label>
+          Description
+          <textarea value={marketplaceForm.description} onChange={(e) => handleMarketplaceFormChange("description", e.target.value)} placeholder="Condition, included items, usage, defects, etc." maxLength={1000} rows={4} />
+        </label>
+
+        <div className="marketplace-form-grid">
+          <label>
+            Category
+            <StyledSelect
+              value={marketplaceForm.category}
+              options={["Textbooks", "Project Kits", "Electronics", "Calculators", "Computers", "Accessories", "Sports", "Furniture", "Other"]}
+              onChange={(value) => handleMarketplaceFormChange("category", value)}
+              ariaLabel="Product category"
+            />
+          </label>
+
+          <label>
+            Condition
+            <StyledSelect
+              value={marketplaceForm.condition}
+              options={["New", "Like New", "Good", "Fair", "For Parts"]}
+              onChange={(value) => handleMarketplaceFormChange("condition", value)}
+              ariaLabel="Product condition"
+            />
+          </label>
         </div>
 
-        <div className="exchange-listing-card">
+        <div className="marketplace-listing-type">
+          <span>Listing type</span>
           <div>
-            <span className="exchange-listing-category">
-              PROJECT KIT
-            </span>
-
-            <h4>Arduino Starter Kit</h4>
-
-            <p>
-              Complete kit with sensors and components.
-            </p>
+            <button type="button" className={marketplaceForm.listingType === "fixed" ? "active" : ""} onClick={() => handleMarketplaceFormChange("listingType", "fixed")}>Fixed Price</button>
+            <button type="button" className={marketplaceForm.listingType === "auction" ? "active" : ""} onClick={() => handleMarketplaceFormChange("listingType", "auction")}>Ascending Auction</button>
           </div>
-
-          <strong>₹850</strong>
         </div>
 
-        <div className="exchange-listing-card">
-          <div>
-            <span className="exchange-listing-category">
-              CALCULATOR
-            </span>
-
-            <h4>Scientific Calculator</h4>
-
-            <p>
-              Working perfectly and lightly used.
-            </p>
+        {marketplaceForm.listingType === "fixed" ? (
+          <label>
+            Selling price (₹)
+            <input type="number" min="1" value={marketplaceForm.price} onChange={(e) => handleMarketplaceFormChange("price", e.target.value)} placeholder="450" />
+          </label>
+        ) : (
+          <div className="marketplace-form-grid">
+            <label>
+              Starting price (₹)
+              <input type="number" min="1" value={marketplaceForm.startingPrice} onChange={(e) => handleMarketplaceFormChange("startingPrice", e.target.value)} placeholder="500" />
+            </label>
+            <label>
+              Minimum bid increment (₹)
+              <input type="number" min="1" value={marketplaceForm.minimumBidIncrement} onChange={(e) => handleMarketplaceFormChange("minimumBidIncrement", e.target.value)} placeholder="50" />
+            </label>
+            <label>
+              Auction ends
+              <input type="datetime-local" value={marketplaceForm.auctionEndAt} onChange={(e) => handleMarketplaceFormChange("auctionEndAt", e.target.value)} />
+            </label>
           </div>
+        )}
 
-          <strong>₹600</strong>
+        <div className="marketplace-payment-options">
+          <span>Accepted payment methods</span>
+          <label><input type="checkbox" checked={marketplaceForm.paymentMethods.includes("cash")} onChange={() => toggleMarketplacePaymentMethod("cash")} /> Cash</label>
+          <label><input type="checkbox" checked={marketplaceForm.paymentMethods.includes("online")} onChange={() => toggleMarketplacePaymentMethod("online")} /> Online</label>
         </div>
 
+        <label>
+          Campus handover location
+          <input value={marketplaceForm.handoverLocation} onChange={(e) => handleMarketplaceFormChange("handoverLocation", e.target.value)} placeholder="e.g. Main Block / Library" maxLength={120} />
+        </label>
+
+        <label className="marketplace-image-picker">
+          <span>Product images <small>(1–6 images, max 10 MB each)</small></span>
+          <input type="file" accept="image/*" multiple onChange={(e) => { handleMarketplaceFiles(e.target.files); e.target.value = ""; }} />
+          <div className="marketplace-image-picker-box"><Upload size={18} /> {marketplaceForm.files.length ? `${marketplaceForm.files.length} image(s) selected` : "Choose product images"}</div>
+        </label>
+
+        {marketplaceForm.files.length > 0 && (
+          <div className="marketplace-selected-files">
+            {marketplaceForm.files.map((file) => <span key={`${file.name}-${file.size}`}>{file.name}</span>)}
+          </div>
+        )}
+
+        {marketplaceFormError && <div className="marketplace-inline-error">{marketplaceFormError}</div>}
+
+        <div className="marketplace-safety-note">
+          <Shield size={15} />
+          <span>Use campus meeting locations only. Do not include personal home addresses or private contact details in the listing.</span>
+        </div>
+
+        <button type="button" className="marketplace-primary-button marketplace-submit-button" disabled={marketplaceCreating} onClick={createMarketplaceListing}>
+          {marketplaceCreating ? "Creating listing..." : "Publish Listing"}
+        </button>
       </div>
     </div>
   </div>
 )}
 {exchangeOpen && (
-  <div
-    className="exchange-modal-overlay"
-    style={{
-      position: "fixed",
-      inset: 0,
-      zIndex: 99999,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      background: "rgba(0, 0, 0, 0.75)",
-    }}
-  >
-    <div className="exchange-modal">
-
-      <div className="exchange-modal-header">
+  <div className="exchange-modal-overlay">
+    <div className="exchange-modal trade-give-modal">
+      <div className="exchange-modal-header trade-give-modal-header">
         <div>
-          <span className="community-resource-category">
-            STUDENT EXCHANGE
-          </span>
-
-          <h3>Exchange Items</h3>
+          <span className="community-resource-category">STUDENT EXCHANGE</span>
+          <h3>Trade or Give</h3>
+          <p>Trade an item with another student or give it away for free.</p>
         </div>
-
         <button
           type="button"
           className="exchange-modal-close"
-          onClick={() => setExchangeOpen(false)}
-          aria-label="Close exchange"
+          onClick={() => {
+            setExchangeOpen(false);
+            setTradeGiveSelectedListing(null);
+            setTradeGiveCreateOpen(false);
+          }}
+          aria-label="Close Trade or Give"
         >
           <X size={18} />
         </button>
       </div>
 
-      <div className="exchange-listings">
-
-        <div className="exchange-listing-card">
-          <div>
-            <span className="exchange-listing-category">
-              TEXTBOOK
-            </span>
-
-            <h4>Engineering Physics Book</h4>
-
-            <p>
-              Looking to exchange for Engineering Mathematics.
-            </p>
-          </div>
-
-          <strong>↔</strong>
-        </div>
-
-        <div className="exchange-listing-card">
-          <div>
-            <span className="exchange-listing-category">
-              PROJECT KIT
-            </span>
-
-            <h4>ESP32 Development Kit</h4>
-
-            <p>
-              Exchange for Arduino or Raspberry Pi components.
-            </p>
-          </div>
-
-          <strong>↔</strong>
-        </div>
-
-        <div className="exchange-listing-card">
-          <div>
-            <span className="exchange-listing-category">
-              CALCULATOR
-            </span>
-
-            <h4>Casio Scientific Calculator</h4>
-
-            <p>
-              Exchange for another compatible scientific calculator.
-            </p>
-          </div>
-
-          <strong>↔</strong>
-        </div>
-
+      <div className="trade-give-actions">
+        <button
+          type="button"
+          className="trade-give-primary-action"
+          onClick={() => {
+            resetTradeGiveForm();
+            setTradeGiveCreateOpen(true);
+          }}
+        >
+          <Plus size={16} />
+          Post an Item
+        </button>
+        <span>Choose Trade or Give when you post.</span>
       </div>
+
+      {tradeGiveLoading ? (
+        <div className="trade-give-empty">Loading live listings...</div>
+      ) : tradeGiveListings.length === 0 ? (
+        <div className="trade-give-empty">
+          <strong>No Trade or Give listings yet.</strong>
+          <span>Be the first student to post an item.</span>
+        </div>
+      ) : (
+        <div className="trade-give-listings">
+          {tradeGiveListings.map((listing) => {
+            const image = listing.imageThumbnails?.[0] || listing.imageUrls?.[0];
+            const isOwner = listing.ownerId === authUser?.uid;
+
+            return (
+              <button
+                key={listing.id}
+                type="button"
+                className="trade-give-listing-card"
+                onClick={() => openTradeGiveListing(listing)}
+              >
+                <div className="trade-give-listing-image-wrap">
+                  {image ? (
+                    <img src={image} alt={listing.title} className="trade-give-listing-image" />
+                  ) : (
+                    <div className="trade-give-listing-image-placeholder">
+                      <ArrowLeftRight size={22} />
+                    </div>
+                  )}
+                </div>
+                <div className="trade-give-listing-content">
+                  <div className="trade-give-listing-topline">
+                    <span className={`trade-give-mode-badge ${listing.mode === "give" ? "give" : "trade"}`}>
+                      {listing.mode === "give" ? "GIVE" : "TRADE"}
+                    </span>
+                    <span className="trade-give-listing-category">{listing.category || "ITEM"}</span>
+                  </div>
+                  <h4>{listing.title}</h4>
+                  <p>{listing.description}</p>
+                  {listing.mode === "trade" && listing.wantedItem && (
+                    <span className="trade-give-wanted">Looking for: {listing.wantedItem}</span>
+                  )}
+                  <div className="trade-give-listing-meta">
+                    <span>{listing.condition || "Good"}</span>
+                    <span>{isOwner ? "Your listing" : `${listing.ownerName || "CIT Student"}`}</span>
+                  </div>
+                </div>
+                <div className="trade-give-listing-arrow">›</div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {tradeGiveSelectedListing && (
+        <div className="trade-give-detail-overlay">
+          <div className="trade-give-detail-modal">
+            <div className="trade-give-detail-header">
+              <div>
+                <span className={`trade-give-mode-badge ${tradeGiveSelectedListing.mode === "give" ? "give" : "trade"}`}>
+                  {tradeGiveSelectedListing.mode === "give" ? "GIVE AWAY" : "TRADE"}
+                </span>
+                <h3>{tradeGiveSelectedListing.title}</h3>
+                <p>{tradeGiveSelectedListing.description}</p>
+              </div>
+              <button
+                type="button"
+                className="exchange-modal-close"
+                onClick={() => setTradeGiveSelectedListing(null)}
+                aria-label="Close item details"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {tradeGiveSelectedListing.imageUrls?.length > 0 && (
+              <div className="trade-give-detail-images">
+                {tradeGiveSelectedListing.imageUrls.map((image, index) => (
+                  <img key={`${image}-${index}`} src={image} alt={`${tradeGiveSelectedListing.title} ${index + 1}`} />
+                ))}
+              </div>
+            )}
+
+            <div className="trade-give-detail-info">
+              <div><span>Category</span><strong>{tradeGiveSelectedListing.category || "—"}</strong></div>
+              <div><span>Condition</span><strong>{tradeGiveSelectedListing.condition || "—"}</strong></div>
+              <div><span>Handover</span><strong>{tradeGiveSelectedListing.handoverLocation || "CIT Campus"}</strong></div>
+              <div><span>Posted by</span><strong>{tradeGiveSelectedListing.ownerName || "CIT Student"}</strong></div>
+            </div>
+
+            {tradeGiveSelectedListing.mode === "trade" && (
+              <div className="trade-give-wanted-panel">
+                <span>Looking for</span>
+                <strong>{tradeGiveSelectedListing.wantedItem || "Anything useful"}</strong>
+              </div>
+            )}
+
+            {tradeGiveSelectedListing.ownerId !== authUser?.uid && tradeGiveSelectedListing.status === "active" && (
+              <div className="trade-give-request-area">
+                {tradeGiveRequestsLoading ? (
+                  <span>Checking your request...</span>
+                ) : tradeGiveRequests[0] ? (
+                  <div className="trade-give-request-status">
+                    <strong>Your request: {tradeGiveRequests[0].status}</strong>
+                    {tradeGiveRequests[0].message && <span>{tradeGiveRequests[0].message}</span>}
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="trade-give-primary-action"
+                    onClick={() => setTradeGiveRequestOpen(true)}
+                  >
+                    {tradeGiveSelectedListing.mode === "give" ? "Claim this item" : "Request a trade"}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {tradeGiveSelectedListing.ownerId === authUser?.uid && (
+              <div className="trade-give-owner-panel">
+                <div className="trade-give-owner-heading">
+                  <strong>Incoming requests</strong>
+                  <span>{tradeGiveRequests.length}</span>
+                </div>
+                {tradeGiveRequestsLoading ? (
+                  <span>Loading requests...</span>
+                ) : tradeGiveRequests.length === 0 ? (
+                  <span>No requests yet.</span>
+                ) : (
+                  <div className="trade-give-request-list">
+                    {tradeGiveRequests.map((requestItem) => (
+                      <div key={requestItem.id} className="trade-give-request-row">
+                        <div>
+                          <strong>{requestItem.requesterName || "CIT Student"}</strong>
+                          <span>{requestItem.message || "Wants this item."}</span>
+                          <small>Status: {requestItem.status}</small>
+                        </div>
+                        {requestItem.status === "pending" && tradeGiveSelectedListing.status === "active" && (
+                          <div className="trade-give-request-actions">
+                            <button type="button" onClick={() => updateTradeGiveRequest(requestItem, "accepted")}>Accept</button>
+                            <button type="button" onClick={() => updateTradeGiveRequest(requestItem, "declined")}>Decline</button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tradeGiveRequestOpen && tradeGiveSelectedListing && (
+        <div className="trade-give-request-overlay">
+          <div className="trade-give-request-modal">
+            <button
+              type="button"
+              className="exchange-modal-close"
+              onClick={() => setTradeGiveRequestOpen(false)}
+              aria-label="Close request"
+            >
+              <X size={18} />
+            </button>
+            <span className={`trade-give-mode-badge ${tradeGiveSelectedListing.mode === "give" ? "give" : "trade"}`}>
+              {tradeGiveSelectedListing.mode === "give" ? "FREE GIVE" : "TRADE REQUEST"}
+            </span>
+            <h3>{tradeGiveSelectedListing.mode === "give" ? "Claim this item" : "Request a trade"}</h3>
+            <p>
+              {tradeGiveSelectedListing.mode === "give"
+                ? "Send the owner a short message about why you want the item."
+                : `Tell ${tradeGiveSelectedListing.ownerName || "the owner"} what you can offer in return.`}
+            </p>
+            <textarea
+              value={tradeGiveRequestText}
+              onChange={(e) => setTradeGiveRequestText(e.target.value)}
+              placeholder={tradeGiveSelectedListing.mode === "give" ? "Optional message..." : "What would you like to offer in return?"}
+              maxLength={500}
+              rows={5}
+            />
+            <button
+              type="button"
+              className="trade-give-primary-action"
+              disabled={tradeGiveRequestSubmitting}
+              onClick={submitTradeGiveRequest}
+            >
+              {tradeGiveRequestSubmitting ? "Sending..." : "Send Request"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {tradeGiveCreateOpen && (
+        <div className="trade-give-create-overlay">
+          <div className="trade-give-create-modal">
+            <div className="trade-give-create-header">
+              <div>
+                <span className="community-resource-category">POST ITEM</span>
+                <h3>Trade or Give</h3>
+                <p>Choose whether you want something in return or want to give it away.</p>
+              </div>
+              <button
+                type="button"
+                className="exchange-modal-close"
+                onClick={() => setTradeGiveCreateOpen(false)}
+                aria-label="Close create listing"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="trade-give-mode-selector">
+              <button
+                type="button"
+                className={tradeGiveForm.mode === "trade" ? "active" : ""}
+                onClick={() => handleTradeGiveFormChange("mode", "trade")}
+              >
+                <ArrowLeftRight size={17} />
+                <span><strong>Trade</strong><small>Receive another item in return</small></span>
+              </button>
+              <button
+                type="button"
+                className={tradeGiveForm.mode === "give" ? "active" : ""}
+                onClick={() => handleTradeGiveFormChange("mode", "give")}
+              >
+                <ShoppingBag size={17} />
+                <span><strong>Give</strong><small>Give it to another student for free</small></span>
+              </button>
+            </div>
+
+            <div className="trade-give-form-grid">
+              <label><span>Item title</span><input value={tradeGiveForm.title} onChange={(e) => handleTradeGiveFormChange("title", e.target.value)} placeholder="e.g. Engineering Physics Book" maxLength={120} /></label>
+              <label><span>Category</span><StyledSelect value={tradeGiveForm.category} options={["Textbooks", "Project Kits", "Electronics", "Calculators", "Stationery", "Other"]} onChange={(value) => handleTradeGiveFormChange("category", value)} ariaLabel="Trade or give category" /></label>
+              <label><span>Condition</span><StyledSelect value={tradeGiveForm.condition} options={["New", "Like New", "Good", "Fair", "Used"]} onChange={(value) => handleTradeGiveFormChange("condition", value)} ariaLabel="Trade or give condition" /></label>
+              <label><span>Handover location</span><input value={tradeGiveForm.handoverLocation} onChange={(e) => handleTradeGiveFormChange("handoverLocation", e.target.value)} placeholder="CIT Campus" maxLength={120} /></label>
+            </div>
+
+            <label className="trade-give-full-field">
+              <span>Description</span>
+              <textarea value={tradeGiveForm.description} onChange={(e) => handleTradeGiveFormChange("description", e.target.value)} placeholder="Describe the item, what is included, and any defects." maxLength={1000} rows={4} />
+            </label>
+
+            {tradeGiveForm.mode === "trade" && (
+              <label className="trade-give-full-field">
+                <span>What are you looking for in return?</span>
+                <input value={tradeGiveForm.wantedItem} onChange={(e) => handleTradeGiveFormChange("wantedItem", e.target.value)} placeholder="e.g. Arduino Uno, sensors, or another textbook" maxLength={300} />
+              </label>
+            )}
+
+            <label className="trade-give-upload-field">
+              <span>Item images <small>(1–6 images, max 10 MB each)</small></span>
+              <input type="file" accept="image/*" multiple onChange={(e) => { handleTradeGiveFiles(e.target.files); e.target.value = ""; }} />
+              <div className="marketplace-image-picker-box"><Upload size={18} /> {tradeGiveForm.files.length ? `${tradeGiveForm.files.length} image(s) selected` : "Choose item images"}</div>
+            </label>
+
+            {tradeGiveForm.files.length > 0 && (
+              <div className="marketplace-selected-files">
+                {tradeGiveForm.files.map((file) => <span key={`${file.name}-${file.size}`}>{file.name}</span>)}
+              </div>
+            )}
+
+            {tradeGiveError && <div className="marketplace-inline-error">{tradeGiveError}</div>}
+
+            <div className="trade-give-create-actions">
+              <button type="button" className="secondary-button" onClick={() => setTradeGiveCreateOpen(false)}>Cancel</button>
+              <button type="button" className="primary-button" onClick={createTradeGiveListing} disabled={tradeGiveCreating}>
+                {tradeGiveCreating ? "Publishing..." : "Publish Listing"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   </div>
 )}
   
   
 {biddingOpen && (
-  <div
-    className="exchange-modal-overlay"
-    style={{
-      position: "fixed",
-      inset: 0,
-      zIndex: 99999,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      background: "rgba(0, 0, 0, 0.75)",
-    }}
-  >
-    <div className="exchange-modal">
-
-      <div className="exchange-modal-header">
+  <div className="exchange-modal-overlay">
+    <div className="exchange-modal marketplace-auction-modal">
+      <div className="exchange-modal-header marketplace-modal-header">
         <div>
-          <span className="community-resource-category">
-            STUDENT AUCTIONS
-          </span>
-
+          <span className="community-resource-category">STUDENT AUCTIONS</span>
           <h3>Live Bidding</h3>
+          <p className="marketplace-modal-subtitle">Normal ascending bids. No paid entry, bidding credits, or random winners.</p>
         </div>
-
-        <button
-          type="button"
-          className="exchange-modal-close"
-          onClick={() => setBiddingOpen(false)}
-          aria-label="Close auctions"
-        >
+        <button type="button" className="exchange-modal-close" onClick={() => { setBiddingOpen(false); setMarketplaceSelectedAuction(null); }} aria-label="Close auctions">
           <X size={18} />
         </button>
       </div>
 
-      <div className="exchange-listings">
+      <div className="marketplace-auction-list">
+        {marketplaceListings.filter((listing) => listing.listingType === "auction").length === 0 ? (
+          <div className="marketplace-empty-state"><Gavel size={26} /><strong>No auctions yet</strong><span>Student auctions will appear here when someone lists one.</span></div>
+        ) : (
+          marketplaceListings
+            .filter((listing) => listing.listingType === "auction")
+            .map((listing) => {
+              const end = listing.auctionEndAt?.toDate?.() || new Date(listing.auctionEndAt);
+              const ended = !end || Number.isNaN(end.getTime()) || end <= new Date();
+              const minimumNextBid = Number(listing.currentPrice || listing.startingPrice || 0) + Number(listing.minimumBidIncrement || 1);
+              const isSelected = marketplaceSelectedAuction?.id === listing.id;
 
-        <div className="exchange-listing-card">
-          <div>
-            <span className="exchange-listing-category">
-              PROJECT KIT
-            </span>
+              return (
+                <div className={`marketplace-auction-card ${isSelected ? "selected" : ""}`} key={listing.id}>
+                  <div className="marketplace-auction-card-main">
+                    <div className="marketplace-auction-image">
+                      {listing.imageThumbnails?.[0] || listing.imageUrls?.[0] ? <img src={listing.imageThumbnails?.[0] || listing.imageUrls?.[0]} alt={listing.title} /> : <Gavel size={22} />}
+                    </div>
+                    <div className="marketplace-auction-details">
+                      <span className="exchange-listing-category">{listing.category || "AUCTION"}</span>
+                      <h4>{listing.title}</h4>
+                      <p>{listing.description}</p>
+                      <div className="marketplace-auction-stats">
+                        <span>Current bid <strong>₹{Number(listing.currentPrice || listing.startingPrice || 0).toLocaleString("en-IN")}</strong></span>
+                        <span>{listing.bidCount || 0} bids</span>
+                        <span>{ended ? "Ended" : `Ends ${end.toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}`}</span>
+                      </div>
+                    </div>
+                  </div>
 
-            <h4>Arduino Uno Starter Kit</h4>
+                  {!ended && listing.sellerId !== authUser?.uid && (
+                    <div className="marketplace-bid-controls">
+                      <input
+                        id={`bid-${listing.id}`}
+                        type="number"
+                        min={minimumNextBid}
+                        step="1"
+                        placeholder={`Min ₹${Math.ceil(minimumNextBid)}`}
+                        disabled={marketplaceBidLoading}
+                      />
+                      <button
+                        type="button"
+                        disabled={marketplaceBidLoading}
+                        onClick={() => {
+                          const input = document.getElementById(`bid-${listing.id}`);
+                          placeMarketplaceBid(listing, input?.value);
+                        }}
+                      >
+                        {marketplaceBidLoading ? "..." : "Place Bid"}
+                      </button>
+                    </div>
+                  )}
 
-            <p>
-              Current highest bid: ₹700
-            </p>
-          </div>
+                  {listing.sellerId === authUser?.uid && (
+                    <div className="marketplace-own-auction-note">You are the seller — you cannot bid on this auction.</div>
+                  )}
 
-          <strong>₹750</strong>
-        </div>
+                  {listing.sellerId !== authUser?.uid &&
+                    listing.highestBidderId === authUser?.uid && (
+                      <div className="marketplace-highest-bidder-note">
+                        You are currently the highest bidder.
+                      </div>
+                    )}
 
-        <div className="exchange-listing-card">
-          <div>
-            <span className="exchange-listing-category">
-              CALCULATOR
-            </span>
+                  <button type="button" className="marketplace-history-button" onClick={() => loadMarketplaceBidHistory(listing)}>
+                    {isSelected ? "Hide bid history" : "View bid history"}
+                  </button>
 
-            <h4>Casio FX-991ES Plus</h4>
-
-            <p>
-              Current highest bid: ₹500
-            </p>
-          </div>
-
-          <strong>₹550</strong>
-        </div>
-
-        <div className="exchange-listing-card">
-          <div>
-            <span className="exchange-listing-category">
-              TEXTBOOK
-            </span>
-
-            <h4>Data Structures & Algorithms</h4>
-
-            <p>
-              Current highest bid: ₹300
-            </p>
-          </div>
-
-          <strong>₹350</strong>
-        </div>
-
+                  {isSelected && (
+                    <div className="marketplace-bid-history">
+                      {marketplaceBidHistoryLoading ? (
+                        <span>Loading bid history...</span>
+                      ) : marketplaceBidHistory.length === 0 ? (
+                        <span>No bids yet.</span>
+                      ) : (
+                        marketplaceBidHistory.map((bid, index) => (
+                          <div key={bid.id} className="marketplace-bid-history-row">
+                            <span>#{index + 1} {bid.bidderName || "CIT Student"}</span>
+                            <strong>₹{Number(bid.amount || 0).toLocaleString("en-IN")}</strong>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+        )}
       </div>
     </div>
   </div>
-  
 )}
-
 {editProfileOpen && (
   <div className="hackathon-modal-overlay">
     <div className="hackathon-modal edit-profile-modal">
@@ -7775,8 +11503,8 @@ onSubmit={async (e) => {
 
     {selectedHackathon && (
       
-      <div className="hackathon-modal-overlay">
-        <div className="hackathon-modal">
+      <div className="hackathon-modal-overlay competition-modal-overlay">
+        <div className="hackathon-modal hackathon-competition-modal">
 
           <button
             className="hackathon-modal-close"
@@ -7801,9 +11529,65 @@ onSubmit={async (e) => {
             📅 {selectedHackathon.date}
           </p>
 
-          <p className="hackathon-modal-description">
-            {selectedHackathon.description}
-          </p>
+          {(() => {
+            const overviewText = normalizeSheetText(selectedHackathon.detailOverview);
+            const overviewSourceUrl = normalizeOfficialUrl(selectedHackathon.overviewSourceUrl || (overviewText ? getKnownCompetitionOverviewSource(selectedHackathon) : ""));
+            const maxPreviewLength = 520;
+            const needsExpansion = overviewText.length > maxPreviewLength;
+            const visibleOverview = needsExpansion && !hackathonDetailsExpanded
+              ? `${overviewText.slice(0, maxPreviewLength).trim()}…`
+              : overviewText;
+
+            return (
+              <div className="opportunity-overview">
+                <span className="opportunity-overview-label">CHALLENGE OVERVIEW</span>
+                {overviewText ? (
+                  <p style={{ whiteSpace: "pre-line" }}>{visibleOverview}</p>
+                ) : (
+                  <p>No additional challenge overview is available from a verified public source.</p>
+                )}
+
+                {overviewSourceUrl && (
+                  <a href={overviewSourceUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: "10px", fontWeight: 700, opacity: 0.78 }}>
+                    {selectedHackathon.overviewSourceLabel || "Official source"}
+                    <ExternalLink size={11} style={{ marginLeft: "4px", verticalAlign: "-2px" }} />
+                  </a>
+                )}
+
+                {needsExpansion && (
+                  <div style={{ marginTop: "10px" }}>
+                    <button type="button" className="secondary-button" onClick={() => setHackathonDetailsExpanded((prev) => !prev)}>
+                      {hackathonDetailsExpanded ? "Show less" : "Show more"}
+                    </button>
+                  </div>
+                )}
+
+                {selectedHackathon.detailThemes?.filter(isRealOpportunityValue).length > 0 && (
+                  <div className="opportunity-themes">
+                    <span>KEY THEMES</span>
+                    <ul>
+                      {selectedHackathon.detailThemes.filter(isRealOpportunityValue).map((theme, index) => (
+                        <li key={`${selectedHackathon.id}-theme-${index}`}>{theme}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          <div className="opportunity-detail-grid">
+            <div style={DETAIL_TILE_STYLE}><span style={DETAIL_TILE_LABEL_STYLE}>Registration deadline</span><strong style={DETAIL_TILE_VALUE_STYLE}>{formatOpportunityDate(selectedHackathon.registrationDeadline)}</strong></div>
+            <div style={DETAIL_TILE_STYLE}><span style={DETAIL_TILE_LABEL_STYLE}>Eligible year</span><strong style={DETAIL_TILE_VALUE_STYLE}>{selectedHackathon.eligibleYear || "See official source"}</strong></div>
+            <div style={DETAIL_TILE_STYLE}><span style={DETAIL_TILE_LABEL_STYLE}>Category</span><strong style={DETAIL_TILE_VALUE_STYLE}>{selectedHackathon.category || "Competition"}</strong></div>
+            <div style={DETAIL_TILE_STYLE}><span style={DETAIL_TILE_LABEL_STYLE}>Organizer</span><strong style={DETAIL_TILE_VALUE_STYLE}>{selectedHackathon.organizer || "See official source"}</strong></div>
+            <div style={DETAIL_TILE_STYLE}><span style={DETAIL_TILE_LABEL_STYLE}>Prize</span><strong style={DETAIL_TILE_VALUE_STYLE}>{selectedHackathon.prizeAmount || "See official source"}</strong></div>
+            <div style={DETAIL_TILE_STYLE}><span style={DETAIL_TILE_LABEL_STYLE}>Registration</span><strong style={DETAIL_TILE_VALUE_STYLE}>{!selectedHackathon.activeForRegistration ? "Registration Closed" : selectedHackathon.daysRemaining === 0 ? "Closes today" : `${selectedHackathon.daysRemaining ?? "—"} day(s) left`}</strong></div>
+            <div style={DETAIL_TILE_STYLE}><span style={DETAIL_TILE_LABEL_STYLE}>Team size</span><strong style={DETAIL_TILE_VALUE_STYLE}>{selectedHackathon.teamSize || "Not specified in source"}</strong></div>
+            <div style={DETAIL_TILE_STYLE}><span style={DETAIL_TILE_LABEL_STYLE}>Round 1</span><strong style={DETAIL_TILE_VALUE_STYLE}>{formatOpportunityDate(selectedHackathon.round1Date)}</strong></div>
+            <div style={DETAIL_TILE_STYLE}><span style={DETAIL_TILE_LABEL_STYLE}>Round 2</span><strong style={DETAIL_TILE_VALUE_STYLE}>{formatOpportunityDate(selectedHackathon.round2Date)}</strong></div>
+            <div style={DETAIL_TILE_STYLE}><span style={DETAIL_TILE_LABEL_STYLE}>Final / event</span><strong style={DETAIL_TILE_VALUE_STYLE}>{formatOpportunityDate(selectedHackathon.competitionDate)}</strong></div>
+          </div>
 
   <div
     className="hackathon-modal-actions"
@@ -7815,14 +11599,6 @@ onSubmit={async (e) => {
       transform: "translateX(12px)"
     }}
   >
-  <button
-    type="button"
-    className="primary-button"
-    onClick={() => toggleHackathonInterest(selectedHackathon)}
-    disabled={hackathonInterestLoading}
-  >
-    {hackathonInterestIds.has(selectedHackathon.id) ? "✓ Interested" : "⭐ I'm Interested"}
-  </button>
   <button
     type="button"
     className="secondary-button"
@@ -7839,9 +11615,29 @@ onSubmit={async (e) => {
     <Users size={17} />
     Find Teammates
   </button>
+  {getOpportunityOfficialUrl(selectedHackathon) && (
+    <a
+      className="primary-button official-opportunity-button"
+      href={getOpportunityOfficialUrl(selectedHackathon)}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      <ExternalLink size={16} />
+      Source Website
+    </a>
+  )}
+  <a
+    className="secondary-button official-opportunity-button"
+    href={getOpportunityDashboardUrl(selectedHackathon)}
+    target="_blank"
+    rel="noopener noreferrer"
+  >
+    <ExternalLink size={16} />
+    Source Dashboard
+  </a>
 </div>
 <p className="hackathon-modal-description" style={{ marginTop: "12px", fontSize: "10px" }}>
-  Official registration will be handled by the hackathon organizer.
+  Registration is handled by the organizer. CampusConnect calculates active registration from the source deadline and status.
 </p>
 
         </div>
@@ -8642,6 +12438,105 @@ const newResource = {
         </div>
       )}
 
+      {/* ================= DIRECT MESSAGE REPORT MODAL ================= */}
+      {directMessageReportTarget && (
+        <div
+          className="team-chat-report-overlay"
+          style={{ zIndex: 10130 }}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setDirectMessageReportTarget(null);
+              setDirectMessageReportReason("");
+              setDirectMessageReportDescription("");
+            }
+          }}
+        >
+          <div
+            className="team-chat-report-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="direct-message-report-title"
+          >
+            <button
+              type="button"
+              className="hackathon-modal-close"
+              onClick={() => {
+                setDirectMessageReportTarget(null);
+                setDirectMessageReportReason("");
+                setDirectMessageReportDescription("");
+              }}
+              aria-label="Close report"
+            >
+              <X size={18} />
+            </button>
+
+            <div className="team-chat-report-icon">
+              <Flag size={22} />
+            </div>
+            <span className="eyebrow">REPORT MESSAGE</span>
+            <h2 id="direct-message-report-title">Report this message?</h2>
+            <p>
+              Your report will be stored for review. The reported message will not be deleted automatically.
+            </p>
+
+            <div className="team-chat-report-message-preview">
+              <strong>{directMessageReportTarget.senderName || "CIT Student"}</strong>
+              <span>{directMessageReportTarget.message}</span>
+            </div>
+
+            <label className="team-chat-report-label">
+              Reason
+              <select
+                value={directMessageReportReason}
+                onChange={(event) => setDirectMessageReportReason(event.target.value)}
+              >
+                <option value="">Select a reason</option>
+                <option value="spam">Spam</option>
+                <option value="harassment">Harassment / bullying</option>
+                <option value="inappropriate">Inappropriate content</option>
+                <option value="hate_or_abusive">Hate / abusive content</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+
+            <label className="team-chat-report-label">
+              Additional details <span>Optional</span>
+              <textarea
+                value={directMessageReportDescription}
+                onChange={(event) => setDirectMessageReportDescription(event.target.value)}
+                placeholder="Tell us anything that may help with the review..."
+                maxLength={1000}
+                rows={4}
+              />
+            </label>
+
+            <div className="team-chat-report-actions">
+              <button
+                type="button"
+                className="team-confirm-cancel"
+                onClick={() => {
+                  setDirectMessageReportTarget(null);
+                  setDirectMessageReportReason("");
+                  setDirectMessageReportDescription("");
+                }}
+                disabled={directMessageReportSubmitting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="team-chat-report-submit"
+                onClick={submitDirectMessageReport}
+                disabled={!directMessageReportReason || directMessageReportSubmitting}
+              >
+                <Flag size={15} />
+                {directMessageReportSubmitting ? "Submitting..." : "Submit Report"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ================= TEAM CHAT REPORT MODAL ================= */}
       {teamChatReportTarget && (
         <div
@@ -9165,6 +13060,17 @@ const newResource = {
 
       <button
         type="button"
+        className="secondary-button student-message-button"
+        disabled={directMessageOpening || selectedStudent.id === authUser?.uid}
+        onClick={() => openDirectConversation(selectedStudent)}
+      >
+        <MessageCircle size={15} />
+        {directMessageOpening ? "Opening..." : "Message"}
+      </button>
+
+
+      <button
+        type="button"
         className="student-profile-full-button"
         onClick={() => {
           const student = selectedStudent;
@@ -9511,17 +13417,6 @@ try {
       >
         <button
           type="button"
-          className="primary-button"
-          onClick={() => toggleEventInterest(selectedEvent)}
-          disabled={eventInterestLoading}
-        >
-          {eventInterestIds.has(selectedEvent.id)
-            ? "✓ Interested"
-            : "⭐ I'm Interested"}
-        </button>
-
-        <button
-          type="button"
           className="secondary-button"
           onClick={() => {
             setSelectedEvent(null);
@@ -9537,15 +13432,42 @@ try {
           Find Teammates
         </button>
 
-        <button
-          type="button"
-          className="secondary-button"
-          onClick={() =>
-            showActionToast("Event registration will be handled by the organizer.")
-          }
-        >
-          Official Registration
-        </button>
+        {getOpportunityOfficialUrl(selectedEvent) ? (
+          <a
+            className="primary-button official-opportunity-button"
+            href={getOpportunityOfficialUrl(selectedEvent)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <ExternalLink size={16} />
+            Official Website
+          </a>
+        ) : (
+          <button
+            type="button"
+            className="primary-button official-opportunity-button"
+            onClick={() =>
+              showActionToast(
+                "The organizer has not added an official website link yet."
+              )
+            }
+          >
+            <ExternalLink size={16} />
+            Official Website
+          </button>
+        )}
+
+        {getEventDashboardUrl(selectedEvent) && (
+          <a
+            className="secondary-button official-opportunity-button"
+            href={getEventDashboardUrl(selectedEvent)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <ExternalLink size={16} />
+            Source Dashboard
+          </a>
+        )}
       </div>
 
       <p

@@ -1,5 +1,3 @@
-const crypto = require("node:crypto");
-
 const {
   cert,
   getApps,
@@ -10,17 +8,67 @@ const {
   getAuth,
 } = require("firebase-admin/auth");
 
+const ImageKit = require("@imagekit/nodejs");
+
+function cleanEnvValue(value) {
+  if (!value) {
+    return "";
+  }
+
+  let cleaned = String(value).trim();
+
+  if (
+    cleaned.startsWith('"') &&
+    cleaned.endsWith('"')
+  ) {
+    cleaned = cleaned.slice(1, -1);
+  }
+
+  if (
+    cleaned.startsWith("'") &&
+    cleaned.endsWith("'")
+  ) {
+    cleaned = cleaned.slice(1, -1);
+  }
+
+  return cleaned.trim();
+}
+
+function sendJson(response, statusCode, data) {
+  // Vercel / Express-style response
+  if (
+    typeof response.status === "function" &&
+    typeof response.json === "function"
+  ) {
+    return response.status(statusCode).json(data);
+  }
+
+  // Normal Node.js response used by Vite local API adapter
+  response.statusCode = statusCode;
+  response.setHeader(
+    "Content-Type",
+    "application/json; charset=utf-8"
+  );
+
+  response.end(JSON.stringify(data));
+}
+
 function getFirebaseAdminApp() {
   if (getApps().length > 0) {
     return getApps()[0];
   }
 
-  const projectId = process.env.FIREBASE_PROJECT_ID;
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(
-    /\\n/g,
-    "\n"
+  const projectId = cleanEnvValue(
+    process.env.FIREBASE_PROJECT_ID
   );
+
+  const clientEmail = cleanEnvValue(
+    process.env.FIREBASE_CLIENT_EMAIL
+  );
+
+  const privateKey = cleanEnvValue(
+    process.env.FIREBASE_PRIVATE_KEY
+  ).replace(/\\n/g, "\n");
 
   if (!projectId || !clientEmail || !privateKey) {
     throw new Error(
@@ -37,19 +85,43 @@ function getFirebaseAdminApp() {
   });
 }
 
-module.exports = async function handler(request, response) {
+module.exports = async function handler(
+  request,
+  response
+) {
+  response.setHeader(
+  "Access-Control-Allow-Origin",
+  "https://campus-connect28.web.app"
+);
+response.setHeader(
+  "Access-Control-Allow-Headers",
+  "Authorization, Content-Type"
+);
+response.setHeader(
+  "Access-Control-Allow-Methods",
+  "GET, OPTIONS"
+);
+
+if (request.method === "OPTIONS") {
+  response.statusCode = 204;
+  return response.end();
+}
   if (request.method !== "GET") {
-    return response.status(405).json({
+    return sendJson(response, 405, {
       error: "Method not allowed",
     });
   }
 
   try {
+    // ---------------------------------------------------------
+    // 1. Verify Firebase user
+    // ---------------------------------------------------------
+
     const authorization =
       request.headers.authorization || "";
 
     if (!authorization.startsWith("Bearer ")) {
-      return response.status(401).json({
+      return sendJson(response, 401, {
         error: "Authentication required.",
       });
     }
@@ -59,7 +131,7 @@ module.exports = async function handler(request, response) {
       .trim();
 
     if (!idToken) {
-      return response.status(401).json({
+      return sendJson(response, 401, {
         error: "Authentication token is missing.",
       });
     }
@@ -71,40 +143,77 @@ module.exports = async function handler(request, response) {
     ).verifyIdToken(idToken);
 
     if (!decodedToken.uid) {
-      return response.status(401).json({
+      return sendJson(response, 401, {
         error: "Invalid Firebase user.",
       });
     }
 
-    const privateKey =
-      process.env.IMAGEKIT_PRIVATE_KEY;
+    // ---------------------------------------------------------
+    // 2. Read ImageKit credentials
+    // ---------------------------------------------------------
 
-    const publicKey =
-      process.env.IMAGEKIT_PUBLIC_KEY;
+    const privateKey = cleanEnvValue(
+      process.env.IMAGEKIT_PRIVATE_KEY
+    );
+
+    const publicKey = cleanEnvValue(
+      process.env.IMAGEKIT_PUBLIC_KEY
+    );
 
     if (!privateKey || !publicKey) {
       console.error(
         "ImageKit environment variables are missing."
       );
 
-      return response.status(500).json({
+      return sendJson(response, 500, {
         error:
           "ImageKit configuration is missing on the server.",
       });
     }
 
-    const expire =
-      Math.floor(Date.now() / 1000) +
-      30 * 60;
+    if (!privateKey.startsWith("private_")) {
+      console.error(
+        "IMAGEKIT_PRIVATE_KEY does not appear to be a valid ImageKit private key."
+      );
 
-    const token = crypto.randomUUID();
+      return sendJson(response, 500, {
+        error:
+          "ImageKit private key configuration is invalid.",
+      });
+    }
 
-    const signature = crypto
-      .createHmac("sha1", privateKey)
-      .update(token + expire)
-      .digest("hex");
+    if (!publicKey.startsWith("public_")) {
+      console.error(
+        "IMAGEKIT_PUBLIC_KEY does not appear to be a valid ImageKit public key."
+      );
 
-    return response.status(200).json({
+      return sendJson(response, 500, {
+        error:
+          "ImageKit public key configuration is invalid.",
+      });
+    }
+
+    // ---------------------------------------------------------
+    // 3. Generate ImageKit authentication parameters
+    //    using the official ImageKit Node.js SDK
+    // ---------------------------------------------------------
+
+    const imageKit = new ImageKit({
+      privateKey,
+    });
+
+    const {
+      token,
+      expire,
+      signature,
+    } =
+      imageKit.helper.getAuthenticationParameters();
+
+    // ---------------------------------------------------------
+    // 4. Return safe values to browser
+    // ---------------------------------------------------------
+
+    return sendJson(response, 200, {
       token,
       expire,
       signature,
@@ -116,7 +225,7 @@ module.exports = async function handler(request, response) {
       error
     );
 
-    return response.status(500).json({
+    return sendJson(response, 500, {
       error:
         "Unable to authenticate ImageKit upload.",
     });
