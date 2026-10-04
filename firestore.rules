@@ -557,49 +557,6 @@ service cloud.firestore {
     }
 
     // =========================================================
-    // PROFILE MEDIA / ACHIEVEMENTS
-    // =========================================================
-
-    // Media metadata is stored in Firestore. The actual image/file
-    // is stored in ImageKit; this collection stores the reference.
-    //
-    // Expected fields include: userId, type, url, title, description,
-    // createdAt, and optionally thumbnailUrl/imageKitFileId.
-    match /profileMedia/{mediaId} {
-
-      // Verified CIT students can view profile media.
-      allow read: if isVerifiedCITUser();
-
-      // A user may create media only for their own profile.
-      allow create: if isVerifiedCITUser()
-        && request.resource.data.userId == request.auth.uid
-        && request.resource.data.type is string
-        && request.resource.data.url is string
-        && request.resource.data.url.size() > 0
-        && request.resource.data.url.size() <= 2000
-        && request.resource.data.title is string
-        && request.resource.data.title.size() <= 200
-        && request.resource.data.description is string
-        && request.resource.data.description.size() <= 1000;
-
-      // Only the owner of the media may edit its metadata.
-      allow update: if isVerifiedCITUser()
-        && resource.data.userId == request.auth.uid
-        && request.resource.data.userId == request.auth.uid
-        && request.resource.data.type is string
-        && request.resource.data.url is string
-        && request.resource.data.title is string
-        && request.resource.data.title.size() <= 200
-        && request.resource.data.description is string
-        && request.resource.data.description.size() <= 1000;
-
-      // Only the owner may remove their media metadata.
-      allow delete: if isVerifiedCITUser()
-        && resource.data.userId == request.auth.uid;
-    }
-
-
-    // =========================================================
     // TEAM MEMBERSHIPS
     // =========================================================
 
@@ -607,25 +564,34 @@ service cloud.firestore {
 
       // A member can read their own membership.
       // A team owner can read memberships belonging to their team.
-     allow read: if isVerifiedCITUser()
-  && (
-    membershipId.matches('^.+_' + request.auth.uid + '$')
+      // A current team member can also read memberships for their team,
+      // so Team Status can show who has joined.
+      // Blocked/removed members do not get this team-wide access.
+      allow read: if isVerifiedCITUser()
+        && (
+          resource.data.memberId == request.auth.uid
 
-    ||
+          ||
 
-    (
-      resource.data.memberId == request.auth.uid
-    )
+          (
+            resource.data.teamId != null
+            && get(
+              /databases/$(database)/documents/teams/$(resource.data.teamId)
+            ).data.createdBy == request.auth.uid
+          )
 
-    ||
+          ||
 
-    (
-      resource.data.teamId != null
-      && get(
-        /databases/$(database)/documents/teams/$(resource.data.teamId)
-      ).data.createdBy == request.auth.uid
-    )
-  );
+          (
+            resource.data.teamId != null
+            && request.auth.uid in get(
+              /databases/$(database)/documents/teams/$(resource.data.teamId)
+            ).data.get('memberIds', [])
+            && !(request.auth.uid in get(
+              /databases/$(database)/documents/teams/$(resource.data.teamId)
+            ).data.get('blockedMemberIds', []))
+          )
+        );
 
       // A student can create their own membership.
       //
@@ -661,5 +627,340 @@ service cloud.firestore {
           ).data.createdBy == request.auth.uid
         );
     }
+
+    // =========================================================
+    // PROFILE MEDIA / ACHIEVEMENTS
+    // =========================================================
+
+    match /profileMedia/{mediaId} {
+
+      // Verified CIT students can view profile media.
+      allow read: if isVerifiedCITUser();
+
+      // Users can create media only for their own profile.
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.type in ["image", "pdf"]
+        && request.resource.data.url is string
+        && request.resource.data.url.size() > 0
+        && request.resource.data.url.size() <= 2000
+        && request.resource.data.thumbnailUrl is string
+        && request.resource.data.thumbnailUrl.size() > 0
+        && request.resource.data.fileName is string
+        && request.resource.data.fileName.size() > 0
+        && request.resource.data.fileName.size() <= 255
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 255
+        && request.resource.data.mimeType is string
+        && request.resource.data.mimeType.size() <= 200
+        && request.resource.data.fileId is string;
+
+      // Only the owner can update their media metadata.
+      allow update: if isVerifiedCITUser()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == request.auth.uid;
+
+      // Only the owner can delete their media metadata.
+      allow delete: if isVerifiedCITUser()
+        && resource.data.userId == request.auth.uid;
+    }
+
+
+    // =========================================================
+    // MARKETPLACE LISTINGS
+    // Fixed-price Buy & Sell + Wanted / Looking For
+    // =========================================================
+
+    match /marketplaceListings/{listingId} {
+
+      // Verified CIT students can browse marketplace and wanted listings.
+      allow read: if isVerifiedCITUser();
+
+      // Fixed-price seller listing. No auction/payment fields are required.
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.listingType == "fixed"
+        && request.resource.data.sellerId == request.auth.uid
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 3
+        && request.resource.data.title.size() <= 120
+        && request.resource.data.description is string
+        && request.resource.data.description.size() >= 10
+        && request.resource.data.description.size() <= 1000
+        && request.resource.data.category is string
+        && request.resource.data.condition is string
+        && request.resource.data.price is number
+        && request.resource.data.price > 0
+        && request.resource.data.handoverLocation is string
+        && request.resource.data.handoverLocation.size() > 0
+        && request.resource.data.handoverLocation.size() <= 120
+        && request.resource.data.imageUrls is list
+        && request.resource.data.imageUrls.size() >= 1
+        && request.resource.data.imageUrls.size() <= 6
+        && request.resource.data.status == "active";
+
+      // Wanted / Looking For post.
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.listingType == "wanted"
+        && request.resource.data.requesterId == request.auth.uid
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 3
+        && request.resource.data.title.size() <= 120
+        && request.resource.data.description is string
+        && request.resource.data.description.size() >= 5
+        && request.resource.data.description.size() <= 1000
+        && request.resource.data.category is string
+        && request.resource.data.condition is string
+        && request.resource.data.status == "active"
+        && (
+          request.resource.data.budget == null
+          || (request.resource.data.budget is number
+            && request.resource.data.budget >= 0)
+        );
+
+      // Owners can edit only their own listing without changing its identity/type.
+      allow update: if isVerifiedCITUser()
+        && (
+          (resource.data.listingType == "fixed"
+            && resource.data.sellerId == request.auth.uid
+            && request.resource.data.listingType == "fixed"
+            && request.resource.data.sellerId == resource.data.sellerId)
+          ||
+          (resource.data.listingType == "wanted"
+            && resource.data.requesterId == request.auth.uid
+            && request.resource.data.listingType == "wanted"
+            && request.resource.data.requesterId == resource.data.requesterId)
+        );
+
+      // Owners can delete only their own listing.
+      allow delete: if isVerifiedCITUser()
+        && (
+          (resource.data.listingType == "fixed"
+            && resource.data.sellerId == request.auth.uid)
+          ||
+          (resource.data.listingType == "wanted"
+            && resource.data.requesterId == request.auth.uid)
+        );
+    }
+
+    // =========================================================
+    // TRADE OR GIVE LISTINGS
+    // =========================================================
+
+    match /tradeGiveListings/{listingId} {
+
+      allow read: if isVerifiedCITUser();
+
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerName is string
+        && request.resource.data.ownerName.size() > 0
+        && request.resource.data.ownerName.size() <= 120
+        && request.resource.data.mode in ["trade", "give"]
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 3
+        && request.resource.data.title.size() <= 120
+        && request.resource.data.description is string
+        && request.resource.data.description.size() >= 10
+        && request.resource.data.description.size() <= 1000
+        && request.resource.data.category is string
+        && request.resource.data.condition is string
+        && request.resource.data.handoverLocation is string
+        && request.resource.data.handoverLocation.size() > 0
+        && request.resource.data.handoverLocation.size() <= 120
+        && request.resource.data.imageUrls is list
+        && request.resource.data.imageUrls.size() >= 1
+        && request.resource.data.imageUrls.size() <= 6
+        && request.resource.data.imageThumbnails is list
+        && request.resource.data.imageThumbnails.size() == request.resource.data.imageUrls.size()
+        && request.resource.data.imageFileIds is list
+        && request.resource.data.imageFileIds.size() == request.resource.data.imageUrls.size()
+        && request.resource.data.imageFileNames is list
+        && request.resource.data.imageFileNames.size() == request.resource.data.imageUrls.size()
+        && request.resource.data.status == "active"
+        && request.resource.data.requestCount == 0
+        && (
+          (request.resource.data.mode == "give"
+            && request.resource.data.wantedItem == "")
+          ||
+          (request.resource.data.mode == "trade"
+            && request.resource.data.wantedItem is string
+            && request.resource.data.wantedItem.size() >= 3
+            && request.resource.data.wantedItem.size() <= 500)
+        );
+
+      allow update: if isVerifiedCITUser()
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.mode == resource.data.mode
+        && request.resource.data.requestCount == resource.data.requestCount;
+
+      allow delete: if isVerifiedCITUser()
+        && resource.data.ownerId == request.auth.uid;
+    }
+
+    // =========================================================
+    // TRADE OR GIVE REQUESTS
+    // =========================================================
+
+    match /tradeGiveRequests/{requestId} {
+
+      allow read: if isVerifiedCITUser()
+        && (
+          resource.data.requesterId == request.auth.uid
+          || resource.data.ownerId == request.auth.uid
+        );
+
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.requesterId == request.auth.uid
+        && request.resource.data.ownerId != request.auth.uid
+        && request.resource.data.listingId is string
+        && exists(
+          /databases/$(database)/documents/tradeGiveListings/$(request.resource.data.listingId)
+        )
+        && get(
+          /databases/$(database)/documents/tradeGiveListings/$(request.resource.data.listingId)
+        ).data.ownerId == request.resource.data.ownerId
+        && get(
+          /databases/$(database)/documents/tradeGiveListings/$(request.resource.data.listingId)
+        ).data.status == "active"
+        && request.resource.data.listingMode in ["trade", "give"]
+        && request.resource.data.status == "pending"
+        && request.resource.data.message is string
+        && request.resource.data.message.size() <= 1000;
+
+      allow update: if isVerifiedCITUser()
+        && resource.data.ownerId == request.auth.uid
+        && resource.data.status == "pending"
+        && request.resource.data.listingId == resource.data.listingId
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.requesterId == resource.data.requesterId
+        && request.resource.data.listingMode == resource.data.listingMode
+        && request.resource.data.message == resource.data.message
+        && request.resource.data.status in ["accepted", "declined"];
+
+      allow delete: if isVerifiedCITUser()
+        && (
+          resource.data.requesterId == request.auth.uid
+          || resource.data.ownerId == request.auth.uid
+        );
+    }
+
+
+    // =========================================================
+    // ONE-TO-ONE DIRECT MESSAGES
+    // =========================================================
+    // Conversation documents contain exactly two different participants.
+    // A direct conversation cannot be created when either participant has
+    // already blocked the other. Messages are also blocked server-side so
+    // the UI cannot be bypassed.
+
+    match /directConversations/{conversationId} {
+      allow read: if isVerifiedCITUser()
+        && request.auth.uid in resource.data.memberIds;
+
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.memberIds is list
+        && request.resource.data.memberIds.size() == 2
+        && request.resource.data.memberIds[0] != request.resource.data.memberIds[1]
+        && request.auth.uid in request.resource.data.memberIds
+        && request.resource.data.memberProfiles is list
+        && request.resource.data.memberProfiles.size() == 2
+        && exists(
+          /databases/$(database)/documents/users/$(request.resource.data.memberIds[0])
+        )
+        && exists(
+          /databases/$(database)/documents/users/$(request.resource.data.memberIds[1])
+        )
+        && !(
+          request.resource.data.memberIds[1] in get(
+            /databases/$(database)/documents/users/$(request.resource.data.memberIds[0])
+          ).data.get('blockedUserIds', [])
+        )
+        && !(
+          request.resource.data.memberIds[0] in get(
+            /databases/$(database)/documents/users/$(request.resource.data.memberIds[1])
+          ).data.get('blockedUserIds', [])
+        );
+
+      allow update: if isVerifiedCITUser()
+        && resource.data.memberIds is list
+        && request.auth.uid in resource.data.memberIds
+        && request.resource.data.memberIds == resource.data.memberIds;
+
+      allow delete: if isVerifiedCITUser()
+        && request.auth.uid in resource.data.memberIds;
+
+      match /messages/{messageId} {
+        allow read: if isVerifiedCITUser()
+          && exists(
+            /databases/$(database)/documents/directConversations/$(conversationId)
+          )
+          && request.auth.uid in get(
+            /databases/$(database)/documents/directConversations/$(conversationId)
+          ).data.memberIds;
+
+        allow create: if isVerifiedCITUser()
+          && request.resource.data.conversationId == conversationId
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.recipientId is string
+          && request.resource.data.recipientId != request.auth.uid
+          && request.resource.data.message is string
+          && request.resource.data.message.size() <= 2000
+          && request.resource.data.media is list
+          && request.resource.data.media.size() <= 3
+          && (
+            request.resource.data.message.size() > 0
+            || request.resource.data.media.size() > 0
+          )
+          && exists(
+            /databases/$(database)/documents/directConversations/$(conversationId)
+          )
+          && request.auth.uid in get(
+            /databases/$(database)/documents/directConversations/$(conversationId)
+          ).data.memberIds
+          && request.resource.data.recipientId in get(
+            /databases/$(database)/documents/directConversations/$(conversationId)
+          ).data.memberIds
+          && exists(
+            /databases/$(database)/documents/users/$(request.auth.uid)
+          )
+          && exists(
+            /databases/$(database)/documents/users/$(request.resource.data.recipientId)
+          )
+          && !(
+            request.resource.data.recipientId in get(
+              /databases/$(database)/documents/users/$(request.auth.uid)
+            ).data.get('blockedUserIds', [])
+          )
+          && !(
+            request.auth.uid in get(
+              /databases/$(database)/documents/users/$(request.resource.data.recipientId)
+            ).data.get('blockedUserIds', [])
+          );
+
+        allow update, delete: if false;
+      }
+    }
+
+    match /directMessageReports/{reportId} {
+      allow create: if isVerifiedCITUser()
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.reporterId != request.resource.data.reportedUserId
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() > 0
+        && request.resource.data.reason.size() <= 100
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 1000
+        && request.resource.data.message is string
+        && request.resource.data.message.size() <= 2000
+        && request.resource.data.status == "pending";
+
+      allow read: if isVerifiedCITUser()
+        && resource.data.reporterId == request.auth.uid;
+
+      allow update, delete: if false;
+    }
+
   }
 }

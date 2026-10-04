@@ -1,9 +1,9 @@
 
 import { useState, useEffect, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import {
   Home,
   Trophy,
-  CalendarDays,
   Users,
   BookOpen,
   User,
@@ -13,7 +13,6 @@ import {
 Rocket,
 ShoppingBag,
 ArrowLeftRight,
-Gavel,
 Code2,
 Palette,
 Database,
@@ -41,6 +40,7 @@ Megaphone,
   PanelLeftOpen,
   ExternalLink,
   Star,
+  CircleHelp,
 } from "lucide-react";
 
 import { upload as imageKitUpload } from "@imagekit/javascript";
@@ -82,59 +82,178 @@ import {
 const COLLEGE_EMAIL_DOMAIN = "@citchennai.net";
 
 
-const StyledSelect = ({ value, options, onChange, ariaLabel, className = "" }) => {
+const StyledSelect = ({
+  value,
+  options,
+  onChange,
+  ariaLabel,
+  className = "",
+  name = "",
+  required = false,
+  placeholder = "",
+}) => {
   const [open, setOpen] = useState(false);
+  const [menuStyle, setMenuStyle] = useState(null);
   const ref = useRef(null);
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+
+  const normalizedOptions = options.map((option) =>
+    typeof option === "string"
+      ? { value: option, label: option }
+      : option
+  );
+
+  const selectedOption = normalizedOptions.find((option) => option.value === value);
+  const displayValue = selectedOption?.label || value || placeholder || "Select";
+
+  const updateMenuPosition = () => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 8;
+    const gap = 6;
+    const preferredMaxHeight = Math.min(300, Math.max(160, window.innerHeight * 0.42));
+
+    const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
+    const spaceAbove = rect.top - viewportPadding;
+    const openUpward =
+      spaceBelow < Math.min(preferredMaxHeight, 220) && spaceAbove > spaceBelow;
+
+    const maxHeight = Math.max(
+      120,
+      Math.min(preferredMaxHeight, openUpward ? spaceAbove - gap : spaceBelow - gap)
+    );
+
+    const width = Math.min(
+      Math.max(rect.width, 150),
+      window.innerWidth - viewportPadding * 2
+    );
+
+    const left = Math.max(
+      viewportPadding,
+      Math.min(rect.left, window.innerWidth - width - viewportPadding)
+    );
+
+    setMenuStyle({
+      "--dropdown-left": `${left}px`,
+      "--dropdown-top": openUpward ? "auto" : `${rect.bottom + gap}px`,
+      "--dropdown-bottom": openUpward
+        ? `${window.innerHeight - rect.top + gap}px`
+        : "auto",
+      "--dropdown-width": `${width}px`,
+      maxHeight: `${maxHeight}px`,
+    });
+  };
 
   useEffect(() => {
-    if (!open) return;
-    const handlePointerDown = (event) => {
-      if (ref.current && !ref.current.contains(event.target)) {
+    if (!open) {
+      setMenuStyle(null);
+      return undefined;
+    }
+
+    updateMenuPosition();
+
+    const handleOutsidePointer = (event) => {
+      const insideTrigger = ref.current && ref.current.contains(event.target);
+      const insideMenu = menuRef.current && menuRef.current.contains(event.target);
+      if (!insideTrigger && !insideMenu) {
         setOpen(false);
       }
     };
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
+
+    const handleViewportChange = () => updateMenuPosition();
+
+    document.addEventListener("pointerdown", handleOutsidePointer);
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", handleOutsidePointer);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
   }, [open]);
 
   return (
-    <div ref={ref} className={`styled-select ${open ? "open" : ""} ${className}`}>
+    <div
+      ref={ref}
+      className={`styled-select ${open ? "open" : ""} ${className}`}
+    >
+      {name && (
+        <select
+          className="styled-select-native"
+          name={name}
+          value={value}
+          required={required}
+          onChange={(event) => onChange(event.target.value)}
+          tabIndex={-1}
+          aria-hidden="true"
+        >
+          {placeholder && (
+            <option value="" disabled>
+              {placeholder}
+            </option>
+          )}
+          {normalizedOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      )}
+
       <button
+        ref={triggerRef}
         type="button"
         className="styled-select-trigger"
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}
+        aria-required={required || undefined}
         onClick={() => setOpen((prev) => !prev)}
       >
-        <span>{value}</span>
+        <span>{displayValue}</span>
         <ChevronDown size={15} />
       </button>
 
-      {open && (
-        <div className="styled-select-menu" role="listbox" aria-label={ariaLabel}>
-          {options.map((option) => (
-            <button
-              type="button"
-              role="option"
-              aria-selected={value === option}
-              className={`styled-select-option ${value === option ? "selected" : ""}`}
-              key={option}
-              onClick={() => {
-                onChange(option);
-                setOpen(false);
-              }}
-            >
-              <span>{option}</span>
-              {value === option && <CheckCircle2 size={14} />}
-            </button>
-          ))}
-        </div>
-      )}
+      {open &&
+        menuStyle &&
+        createPortal(
+          <div
+            className={`styled-select-menu styled-select-menu-portal ${
+              menuStyle.top === "auto" ? "opens-upward" : ""
+            }`}
+            role="listbox"
+            aria-label={ariaLabel}
+            style={menuStyle}
+            ref={menuRef}
+          >
+            {normalizedOptions.map((option) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={value === option.value}
+                className={`styled-select-option ${
+                  value === option.value ? "selected" : ""
+                }`}
+                key={option.value}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+              >
+                <span>{option.label}</span>
+                {value === option.value && <CheckCircle2 size={14} />}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
     </div>
   );
 };
-
 
 const withTimeout = (promise, milliseconds, operationName) => {
   return Promise.race([
@@ -180,6 +299,7 @@ const getImageKitAuth = async (user) => {
   try {
     const authResponse = await fetch(IMAGEKIT_AUTH_ENDPOINT, {
       method: "GET",
+      cache: "no-store",
       headers: {
         Accept: "application/json",
         Authorization: `Bearer ${idToken}`,
@@ -188,6 +308,7 @@ const getImageKitAuth = async (user) => {
 
     const contentType = authResponse.headers.get("content-type") || "";
     const responseText = await authResponse.text();
+    const trimmedResponse = responseText.trim();
 
     if (!authResponse.ok) {
       console.error("IMAGEKIT AUTH HTTP ERROR:", {
@@ -199,17 +320,23 @@ const getImageKitAuth = async (user) => {
       throw new Error("IMAGEKIT_AUTH_HTTP_ERROR");
     }
 
-    if (!contentType.toLowerCase().includes("application/json")) {
+    if (
+      trimmedResponse.startsWith("<!doctype html") ||
+      trimmedResponse.startsWith("<!DOCTYPE html") ||
+      /^<html[\s>]/i.test(trimmedResponse) ||
+      !contentType.toLowerCase().includes("application/json")
+    ) {
       console.error("IMAGEKIT AUTH NON-JSON RESPONSE:", {
         contentType,
-        response: responseText.slice(0, 500),
+        endpoint: IMAGEKIT_AUTH_ENDPOINT,
+        response: trimmedResponse.slice(0, 500),
       });
       throw new Error("IMAGEKIT_AUTH_INVALID_RESPONSE");
     }
 
     let data;
     try {
-      data = JSON.parse(responseText);
+      data = JSON.parse(trimmedResponse);
     } catch (error) {
       console.error("IMAGEKIT AUTH JSON PARSE ERROR:", error);
       throw new Error("IMAGEKIT_AUTH_INVALID_RESPONSE");
@@ -279,6 +406,110 @@ const normalizeDepartment = (value) => {
     "other": "Other"
   };
   return aliases[text] || (value || "").toString().trim();
+};
+
+
+const CAMPUSCONNECT_COLLEGE = "Chennai Institute of Technology";
+const IDENTITY_PROFILE_VERSION = 1;
+
+const getCITEmailIdentity = (email) => {
+  const normalized = email?.toString().trim().toLowerCase();
+  if (!isCollegeEmail(normalized)) return null;
+
+  const localPart = normalized.slice(0, -COLLEGE_EMAIL_DOMAIN.length);
+  const firstDotIndex = localPart.indexOf(".");
+  if (firstDotIndex <= 0 || firstDotIndex >= localPart.length - 1) return null;
+
+  const nameSequence = localPart.slice(0, firstDotIndex);
+  const departmentAndBatch = localPart.slice(firstDotIndex + 1);
+  const batchMatch = departmentAndBatch.match(/^([a-z]+)(\d{4})$/i);
+
+  if (!/^[a-z0-9]+$/i.test(nameSequence) || !batchMatch) return null;
+
+  const departmentCode = batchMatch[1].toLowerCase();
+  return {
+    nameSequence,
+    department: normalizeDepartment(departmentCode) || departmentCode.toUpperCase(),
+    batchYear: batchMatch[2],
+  };
+};
+
+const formatLockedName = (value) => {
+  const normalized = (value || "").toString().trim().replace(/\s+/g, " ");
+  if (!normalized) return "";
+  return normalized
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1).toLowerCase()}`)
+    .join(" ");
+};
+
+const validateLockedNameFormat = (value, lockedSequence) => {
+  const name = (value || "").toString();
+  const expected = (lockedSequence || "").toString().trim().toLowerCase();
+  const compacted = name.replace(/\s/g, "").toLowerCase();
+  const spaces = (name.match(/ /g) || []).length;
+
+  if (!expected) return { valid: false, message: "Your CIT email could not be used to determine the official name format." };
+  if (!name.trim()) return { valid: false, message: "Please enter your name." };
+  if (name !== name.trim()) return { valid: false, message: "Name cannot start or end with a space." };
+  if (/ {2,}/.test(name)) return { valid: false, message: "Use only one space between name parts." };
+  if (spaces > 3) return { valid: false, message: "You can insert a maximum of 3 spaces." };
+  if (!/^[A-Za-z0-9 ]+$/.test(name)) return { valid: false, message: "Only letters and spaces are allowed in the name." };
+  if (compacted !== expected) return { valid: false, message: "Only spaces may be added. The letters and their order must match your CIT email." };
+
+  return { valid: true, canonical: formatLockedName(name) };
+};
+
+const getCurrentAcademicStartYear = () => {
+  const now = new Date();
+  return now.getMonth() >= 5 ? now.getFullYear() : now.getFullYear() - 1;
+};
+
+const getAcademicYearLabelFromBatch = (batchYear) => {
+  const batch = Number.parseInt(batchYear, 10);
+  if (!Number.isInteger(batch)) return "";
+
+  const yearNumber = getCurrentAcademicStartYear() - batch + 1;
+  if (yearNumber < 1 || yearNumber > 4) return "";
+
+  const suffix = yearNumber === 1 ? "st" : yearNumber === 2 ? "nd" : yearNumber === 3 ? "rd" : "th";
+  return `${yearNumber}${suffix} Year`;
+};
+
+const getDeveloperEmailUrl = (subject) => {
+  const params = new URLSearchParams({
+    view: "cm",
+    fs: "1",
+    tf: "1",
+    to: "campusconnect.developer@gmail.com",
+    su: subject,
+  });
+
+  return `https://mail.google.com/mail/u/0/?${params.toString()}`;
+};
+
+const getDeveloperMailtoUrl = (subject) =>
+  `mailto:campusconnect.developer@gmail.com?subject=${encodeURIComponent(subject)}`;
+
+const handleDeveloperEmailClick = (event, subject) => {
+  const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(
+    navigator.userAgent || ""
+  );
+
+  // On phones/tablets, let the native mailto handler open the installed
+  // mail app (Gmail when it is the device's mail handler).
+  if (isMobileDevice) {
+    return;
+  }
+
+  // Keep the existing desktop behavior: open Gmail compose directly.
+  event.preventDefault();
+  window.open(
+    getDeveloperEmailUrl(subject),
+    "_blank",
+    "noopener,noreferrer"
+  );
 };
 
 const generateCampusConnectId = () => {
@@ -399,7 +630,8 @@ const isRegistrationActive = (competition) => {
     "registrations open",
   ];
 
-  return (
+
+return (
     activeStatuses.some((status) => normalizedStatus === status) &&
     deadline >= startOfLocalDay()
   );
@@ -1855,6 +2087,8 @@ const authFlowRef = useRef(null);
 const signUpSubmittingRef = useRef(false);
 const forgotPasswordSubmittingRef = useRef(false);
 const resendSubmittingRef = useRef(false);
+const navigationLockUntilRef = useRef(0);
+const identityWelcomePendingRef = useRef(false);
 const [activeNav, setActiveNav] = useState("home");
 const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 const [teamCreated, setTeamCreated] = useState(false);
@@ -1879,7 +2113,6 @@ const [selectedHackathon, setSelectedHackathon] = useState(null);
 const [hackathonInterestIds, setHackathonInterestIds] = useState(new Set());
 const [hackathonInterestLoading, setHackathonInterestLoading] = useState(false);
 const [hackathonCategoryFilter, setHackathonCategoryFilter] = useState("");
-const [hackathonDepartmentFilter, setHackathonDepartmentFilter] = useState("");
 const [hackathonYearFilter, setHackathonYearFilter] = useState("");
 const [opportunitySearch, setOpportunitySearch] = useState("");
 const [showAllOpportunities, setShowAllOpportunities] = useState(false);
@@ -1900,14 +2133,11 @@ useEffect(() => {
 }, [
   opportunitySearch,
   hackathonCategoryFilter,
-  hackathonDepartmentFilter,
+  ,
   hackathonYearFilter,
   opportunitySort,
   showAllCompetitions,
 ]);
-const [eventInterestIds, setEventInterestIds] = useState(new Set());
-const [eventInterestLoading, setEventInterestLoading] = useState(false);
-const [selectedEvent, setSelectedEvent] = useState(null);
 const [selectedStudent, setSelectedStudent] = useState(null);
 const [registrationOpen, setRegistrationOpen] = useState(false);
 const [searchOpen, setSearchOpen] = useState(false);
@@ -1943,7 +2173,15 @@ const [teamPreviewLoading, setTeamPreviewLoading] = useState(false);
 const [selectedTeamMembers, setSelectedTeamMembers] = useState([]);
 const [selectedTeamPendingInvites, setSelectedTeamPendingInvites] = useState([]);
 const [teamStatusOpen, setTeamStatusOpen] = useState(false);
+const [teamStatusReadOnly, setTeamStatusReadOnly] = useState(false);
 const [teamStatusLoading, setTeamStatusLoading] = useState(false);
+const [welcomeOpen, setWelcomeOpen] = useState(false);
+const [welcomeSaving, setWelcomeSaving] = useState(false);
+const [identitySetupOpen, setIdentitySetupOpen] = useState(false);
+const [identitySetupSaving, setIdentitySetupSaving] = useState(false);
+const [identitySetupError, setIdentitySetupError] = useState("");
+const [identityNameDraft, setIdentityNameDraft] = useState("");
+const [feedbackSupportOpen, setFeedbackSupportOpen] = useState(false);
 const [teamRemoveTarget, setTeamRemoveTarget] = useState(null);
 const [teamDeleteTarget, setTeamDeleteTarget] = useState(null);
 const [teamChatOpen, setTeamChatOpen] = useState(false);
@@ -1967,6 +2205,7 @@ const [directConversation, setDirectConversation] = useState(null);
 const [directMessages, setDirectMessages] = useState([]);
 const [directMessagesLoading, setDirectMessagesLoading] = useState(false);
 const [directMessageInput, setDirectMessageInput] = useState("");
+const [directMessageMediaFiles, setDirectMessageMediaFiles] = useState([]);
 const [directMessageSending, setDirectMessageSending] = useState(false);
 const [directMessageOpening, setDirectMessageOpening] = useState(false);
 const [directMessageReportTarget, setDirectMessageReportTarget] = useState(null);
@@ -1974,6 +2213,77 @@ const [directMessageReportReason, setDirectMessageReportReason] = useState("");
 const [directMessageReportDescription, setDirectMessageReportDescription] = useState("");
 const [directMessageReportSubmitting, setDirectMessageReportSubmitting] = useState(false);
 const [directMessageMenu, setDirectMessageMenu] = useState(null);
+
+useEffect(() => {
+  if (!directMessageMenu) return undefined;
+
+  const closeMenu = () => setDirectMessageMenu(null);
+  const handlePointerDown = (event) => {
+    const target = event.target;
+    if (target?.closest?.(".direct-message-menu-portal") || target?.closest?.(".direct-message-menu-button")) {
+      return;
+    }
+    closeMenu();
+  };
+
+  document.addEventListener("pointerdown", handlePointerDown);
+  window.addEventListener("resize", closeMenu);
+  window.addEventListener("scroll", closeMenu, true);
+
+  return () => {
+    document.removeEventListener("pointerdown", handlePointerDown);
+    window.removeEventListener("resize", closeMenu);
+    window.removeEventListener("scroll", closeMenu, true);
+  };
+}, [directMessageMenu]);
+
+const toggleExpandedExchangeText = (key) => {
+  setExpandedExchangeTextKeys((current) => {
+    const next = new Set(current);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  });
+};
+
+const [directConversationMenu, setDirectConversationMenu] = useState(false);
+const [directConversationMenuPosition, setDirectConversationMenuPosition] = useState(null);
+const [directConversationConfirm, setDirectConversationConfirm] = useState(null);
+
+useEffect(() => {
+  if (!directConversationMenu) return undefined;
+
+  const handleOutsidePointer = (event) => {
+    const target = event.target;
+    if (
+      target?.closest?.(".direct-conversation-action-menu-portal") ||
+      target?.closest?.(".direct-conversation-action-button")
+    ) {
+      return;
+    }
+    setDirectConversationMenu(false);
+    setDirectConversationMenuPosition(null);
+  };
+
+  const closeForViewportChange = () => {
+    setDirectConversationMenu(false);
+    setDirectConversationMenuPosition(null);
+  };
+
+  document.addEventListener("pointerdown", handleOutsidePointer);
+  window.addEventListener("resize", closeForViewportChange);
+  window.addEventListener("scroll", closeForViewportChange, true);
+
+  return () => {
+    document.removeEventListener("pointerdown", handleOutsidePointer);
+    window.removeEventListener("resize", closeForViewportChange);
+    window.removeEventListener("scroll", closeForViewportChange, true);
+  };
+}, [directConversationMenu]);
+
+
+const [blockedUserIds, setBlockedUserIds] = useState([]);
+const [hiddenDirectConversationIds, setHiddenDirectConversationIds] = useState([]);
 const directMessagesEndRef = useRef(null);
 const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 const [signOutOpen, setSignOutOpen] = useState(false);
@@ -1982,7 +2292,25 @@ const [communitySearch, setCommunitySearch] = useState("");
 const [showSharedResources, setShowSharedResources] = useState(false);
 const [marketplaceOpen, setMarketplaceOpen] = useState(false);
 const [exchangeOpen, setExchangeOpen] = useState(false);
-const [biddingOpen, setBiddingOpen] = useState(false);
+const [marketplaceEnquiry, setMarketplaceEnquiry] = useState(null);
+const [marketplaceDeleteTarget, setMarketplaceDeleteTarget] = useState(null);
+const [wantedDeleteTarget, setWantedDeleteTarget] = useState(null);
+const [tradeGiveDeleteTarget, setTradeGiveDeleteTarget] = useState(null);
+const [expandedExchangeTextKeys, setExpandedExchangeTextKeys] = useState(() => new Set());
+const [wantedOpen, setWantedOpen] = useState(false);
+const [wantedCreateOpen, setWantedCreateOpen] = useState(false);
+const [wantedCreating, setWantedCreating] = useState(false);
+const [wantedLoading, setWantedLoading] = useState(false);
+const [wantedError, setWantedError] = useState("");
+const [wantedListings, setWantedListings] = useState([]);
+const [wantedForm, setWantedForm] = useState({
+  title: "",
+  description: "",
+  category: "Electronics",
+  budget: "",
+  condition: "Any",
+});
+const notificationSeenIdsRef = useRef(new Set());
 const [tradeGiveCreateOpen, setTradeGiveCreateOpen] = useState(false);
 const [tradeGiveCreating, setTradeGiveCreating] = useState(false);
 const [tradeGiveError, setTradeGiveError] = useState("");
@@ -2009,6 +2337,8 @@ const [profileNetworkOpen, setProfileNetworkOpen] = useState(false);
 const [profileNetworkTab, setProfileNetworkTab] = useState("requests");
 const [viewedProfile, setViewedProfile] = useState(null);
 const [editProfileOpen, setEditProfileOpen] = useState(false);
+const [profileNameDraft, setProfileNameDraft] = useState("");
+const [profileNameError, setProfileNameError] = useState("");
 const [profileMedia, setProfileMedia] = useState([]);
 const [profileMediaLoading, setProfileMediaLoading] = useState(false);
 const [profileMediaUploading, setProfileMediaUploading] = useState(false);
@@ -2020,22 +2350,13 @@ const [marketplaceLoading, setMarketplaceLoading] = useState(false);
 const [marketplaceError, setMarketplaceError] = useState("");
 const [marketplaceCreateOpen, setMarketplaceCreateOpen] = useState(false);
 const [marketplaceCreating, setMarketplaceCreating] = useState(false);
-const [marketplaceBidLoading, setMarketplaceBidLoading] = useState(false);
 const [marketplaceFormError, setMarketplaceFormError] = useState("");
-const [marketplaceSelectedAuction, setMarketplaceSelectedAuction] = useState(null);
-const [marketplaceBidHistory, setMarketplaceBidHistory] = useState([]);
-const [marketplaceBidHistoryLoading, setMarketplaceBidHistoryLoading] = useState(false);
 const [marketplaceForm, setMarketplaceForm] = useState({
   title: "",
   description: "",
   category: "Textbooks",
   condition: "Good",
-  listingType: "fixed",
   price: "",
-  startingPrice: "",
-  minimumBidIncrement: "50",
-  auctionEndAt: "",
-  paymentMethods: ["cash", "online"],
   handoverLocation: "CIT Campus",
   files: [],
 });
@@ -2043,19 +2364,21 @@ const [selectedMedia, setSelectedMedia] = useState(null);
 const [mediaGalleryOpen, setMediaGalleryOpen] = useState(false);
 const [profileData, setProfileData] = useState({
   name: "",
-  college: "",
+  college: CAMPUSCONNECT_COLLEGE,
   department: "",
   year: "",
   bio: "",
   skills: "",
   campusConnectId: "",
+  lockedNameSequence: "",
+  identityProfileVersion: 0,
+  identitySetupCompleted: false,
 });
 
 const [activityData, setActivityData] = useState({
   hackathonsJoined: 0,
   teamsCreated: 0,
   resourcesShared: 0,
-  eventsAttended: 0,
 });
 const [communityResources, setCommunityResources] = useState([]);
 
@@ -2066,11 +2389,10 @@ const [registrationSubmitting, setRegistrationSubmitting] = useState(false);
 // ================= PHASE 1: REAL FIRESTORE DATA =================
 const [teammates, setTeammates] = useState([]);
 const [hackathons, setHackathons] = useState([]);
-const [events, setEvents] = useState([]);
 const [dashboardStats, setDashboardStats] = useState({
   activeStudents: 0,
   hackathons: 0,
-  upcomingEvents: 0,
+  resourcesShared: 0,
   teamsFormed: 0,
 });
 const [dataLoading, setDataLoading] = useState(true);
@@ -2147,18 +2469,28 @@ useEffect(() => {
   return () => unsubscribe();
 }, [authUser]);
 
+// Wanted / Looking For posts share the existing marketplaceListings collection,
+// so the feature does not require another Firestore collection or ruleset.
+useEffect(() => {
+  setWantedListings(
+    marketplaceListings.filter(
+      (listing) => listing.listingType === "wanted" && listing.status !== "removed"
+    )
+  );
+  setWantedLoading(marketplaceLoading);
+}, [marketplaceListings, marketplaceLoading]);
+
 // Load the real CampusConnect data used by the dashboard and community.
-// These collections are the Phase 1 data foundation: users, hackathons, events, and teams.
+// These collections are the Phase 1 data foundation: users, hackathons, and teams.
 useEffect(() => {
   if (!authUser) {
     setTeammates([]);
     setHackathons([]);
-    setEvents([]);
     setRegisteredHackathonIds([]);
     setDashboardStats({
       activeStudents: 0,
       hackathons: 0,
-      upcomingEvents: 0,
+      resourcesShared: 0,
       teamsFormed: 0,
     });
     setDataLoading(false);
@@ -2173,11 +2505,10 @@ useEffect(() => {
     setDataError("");
 
     try {
-      const [usersSnapshot, hackathonsSnapshot, eventsSnapshot, teamsSnapshot, registrationsSnapshot] =
+      const [usersSnapshot, hackathonsSnapshot, teamsSnapshot, registrationsSnapshot] =
         await Promise.all([
           getDocs(collection(db, "users")),
           getDocs(collection(db, "hackathons")),
-          getDocs(collection(db, "events")),
           getDocs(collection(db, "teams")),
           getDocs(
             query(
@@ -2233,32 +2564,18 @@ useEffect(() => {
           "Live competition dashboard could not be reached. Showing saved CampusConnect opportunities.";
       }
 
-      const realEvents = eventsSnapshot.docs.map((eventDoc) => ({
-        id: eventDoc.id,
-        ...eventDoc.data(),
-        icon: eventDoc.data().icon || "calendar",
-      }));
-
-      const now = new Date();
-      const upcomingEvents = realEvents.filter((event) => {
-        if (!event.startAt) return true;
-
-        const startDate =
-          typeof event.startAt?.toDate === "function"
-            ? event.startAt.toDate()
-            : new Date(event.startAt);
-
-        return !Number.isNaN(startDate.getTime()) && startDate >= now;
-      });
-
       const realRegisteredHackathonIds = registrationsSnapshot.docs.map(
         (registrationDoc) => registrationDoc.data().hackathonId
       );
 
       setTeammates(realTeammates);
       setHackathons(realHackathons);
-      setEvents(realEvents);
       setRegisteredHackathonIds(realRegisteredHackathonIds);
+      const totalResourcesShared = users.reduce(
+        (total, person) => total + Math.max(0, Number(person.resourcesShared) || 0),
+        0
+      );
+
       setDashboardStats({
         // A user becomes an active student after completing verified sign-in.
         activeStudents:
@@ -2267,7 +2584,7 @@ useEffect(() => {
             ? 0
             : 1),
         hackathons: realHackathons.length,
-        upcomingEvents: upcomingEvents.length,
+        resourcesShared: totalResourcesShared,
         teamsFormed: teamsSnapshot.size,
       });
 
@@ -2334,11 +2651,39 @@ useEffect(() => {
 }, [authUser]);
 
 useEffect(() => {
+  if (!identitySetupOpen || !authUser?.email) return undefined;
+
+  // Always start the one-time identity step from the verified CIT email.
+  // This also prevents stale browser/profile autofill from replacing the
+  // email-derived name before the student makes their one allowed choice
+  // (space insertion only).
+  const identity = getCITEmailIdentity(authUser.email);
+  const lockedSequence =
+    identity?.nameSequence || profileData.lockedNameSequence || "";
+
+  if (lockedSequence) {
+    setIdentityNameDraft(formatLockedName(lockedSequence));
+    setIdentitySetupError("");
+  }
+
+  return undefined;
+}, [identitySetupOpen, authUser?.email]);
+
+useEffect(() => {
   const unsubscribe = onAuthStateChanged(
     auth,
     async (user) => {
       if (!user) {
         setAuthUser(null);
+        setWelcomeOpen(false);
+        setWelcomeSaving(false);
+        setIdentitySetupOpen(false);
+        setIdentitySetupSaving(false);
+        setIdentitySetupError("");
+        setIdentityNameDraft("");
+        identityWelcomePendingRef.current = false;
+        setFeedbackSupportOpen(false);
+        setTeamStatusReadOnly(false);
         setSignInLoading(false);
         setAuthLoading(false);
         return;
@@ -2403,78 +2748,154 @@ useEffect(() => {
           }
         }
 
+        const emailIdentity = getCITEmailIdentity(user.email);
+        const legacyDepartment = normalizeDepartment(
+          data?.department || data?.branch || data?.course || data?.program || ""
+        );
+        const derivedNameSequence = emailIdentity?.nameSequence || data?.lockedNameSequence || "";
+        const derivedDepartment = emailIdentity?.department || legacyDepartment;
+        const derivedYear = getAcademicYearLabelFromBatch(emailIdentity?.batchYear) || data?.year || "";
+
         if (data) {
+          const legacyName = (data.name || "").toString().trim();
+          const legacyNameMatchesIdentity = Boolean(derivedNameSequence) &&
+            legacyName.replace(/\s/g, "").toLowerCase() === derivedNameSequence.toLowerCase();
+          const canonicalLegacyName = legacyNameMatchesIdentity
+            ? formatLockedName(legacyName)
+            : formatLockedName(derivedNameSequence);
+          const identityNeedsSetup = Boolean(
+            derivedNameSequence &&
+            (data.identitySetupCompleted !== true ||
+              data.lockedNameSequence !== derivedNameSequence ||
+              data.identityProfileVersion !== IDENTITY_PROFILE_VERSION)
+          );
+          const identityPatch = {
+            college: CAMPUSCONNECT_COLLEGE,
+            department: derivedDepartment,
+            year: derivedYear,
+            lockedNameSequence: derivedNameSequence || data.lockedNameSequence || "",
+            identityProfileVersion: IDENTITY_PROFILE_VERSION,
+            identitySetupCompleted: identityNeedsSetup ? false : true,
+            email: user.email || data.email || "",
+          };
+          const identityPatchDiffers =
+            data.college !== identityPatch.college ||
+            normalizeDepartment(data.department || "") !== normalizeDepartment(identityPatch.department || "") ||
+            data.year !== identityPatch.year ||
+            data.lockedNameSequence !== identityPatch.lockedNameSequence ||
+            data.identityProfileVersion !== identityPatch.identityProfileVersion ||
+            data.identitySetupCompleted !== identityPatch.identitySetupCompleted ||
+            data.email !== identityPatch.email;
 
-setProfileData({
-  name: data.name || "",
-  college: data.college || "",
-  department: normalizeDepartment(
-    data.department ||
-    data.branch ||
-    data.course ||
-    data.program ||
-    ""
-  ),
-  year: data.year || "",
-  bio: data.bio || "",
-  skills: data.skills || "",
-  campusConnectId: data.campusConnectId || campusConnectId || "",
-});
+          if (identityPatchDiffers) {
+            await setDoc(profileRef, identityPatch, { merge: true });
+            data = { ...data, ...identityPatch };
+          }
 
-  setActivityData({
-    hackathonsJoined: data.hackathonsJoined || 0,
-    teamsCreated: data.teamsCreated || 0,
-    resourcesShared: data.resourcesShared || 0,
-    eventsAttended: data.eventsAttended || 0,
-  });
-} else {
-  const legacySavedName = localStorage.getItem(
-    `campusconnect_name_${user.email?.toLowerCase()}`
-  );
+          const displayName = identityNeedsSetup
+            ? canonicalLegacyName
+            : legacyNameMatchesIdentity
+              ? formatLockedName(legacyName)
+              : formatLockedName(derivedNameSequence) || legacyName;
 
-  const initialProfile = {
-    name: user.displayName || legacySavedName || "",
-    email: user.email || "",
-    college: "",
-    department: "",
-    year: "",
-    bio: "",
-    skills: "",
-    hackathonsJoined: 0,
-    teamsCreated: 0,
-    resourcesShared: 0,
-    eventsAttended: 0,
-    campusConnectId: "",
-  };
+          setProfileData({
+            name: displayName,
+            college: CAMPUSCONNECT_COLLEGE,
+            department: normalizeDepartment(derivedDepartment),
+            year: derivedYear,
+            bio: data.bio || "",
+            skills: data.skills || "",
+            campusConnectId: data.campusConnectId || campusConnectId || "",
+            email: user.email || data.email || "",
+            lockedNameSequence: derivedNameSequence || data.lockedNameSequence || "",
+            identityProfileVersion: IDENTITY_PROFILE_VERSION,
+            identitySetupCompleted: !identityNeedsSetup,
+            blockedUserIds: Array.isArray(data.blockedUserIds) ? data.blockedUserIds : [],
+            hiddenDirectConversationIds: Array.isArray(data.hiddenDirectConversationIds)
+              ? data.hiddenDirectConversationIds
+              : [],
+          });
 
-  try {
-    initialProfile.campusConnectId = await ensureCampusConnectId(user);
-  } catch (idError) {
-    console.error("CAMPUS ID CREATION ERROR:", idError);
-  }
+          setActivityData({
+            hackathonsJoined: data.hackathonsJoined || 0,
+            teamsCreated: data.teamsCreated || 0,
+            resourcesShared: data.resourcesShared || 0,
+          });
 
-  await setDoc(
-    profileRef,
-    initialProfile
-  );
+          setBlockedUserIds(Array.isArray(data.blockedUserIds) ? data.blockedUserIds : []);
+          setHiddenDirectConversationIds(
+            Array.isArray(data.hiddenDirectConversationIds) ? data.hiddenDirectConversationIds : []
+          );
 
-  setProfileData({
-    name: initialProfile.name,
-    college: "",
-    department: "",
-    year: "",
-    bio: "",
-    skills: "",
-    campusConnectId: initialProfile.campusConnectId || "",
-  });
+          if (identityNeedsSetup) {
+            identityWelcomePendingRef.current = !data.welcomeSeen;
+            setIdentityNameDraft(
+              legacyNameMatchesIdentity ? canonicalLegacyName : formatLockedName(derivedNameSequence)
+            );
+            setIdentitySetupError("");
+            setWelcomeOpen(false);
+            setIdentitySetupOpen(true);
+          } else if (!data.welcomeSeen) {
+            identityWelcomePendingRef.current = false;
+            setWelcomeOpen(true);
+          }
+        } else {
+          const identityName = formatLockedName(derivedNameSequence);
+          const initialProfile = {
+            name: identityName,
+            email: user.email || "",
+            college: CAMPUSCONNECT_COLLEGE,
+            department: normalizeDepartment(derivedDepartment),
+            year: derivedYear,
+            bio: "",
+            skills: "",
+            hackathonsJoined: 0,
+            teamsCreated: 0,
+            resourcesShared: 0,
+            campusConnectId: "",
+            lockedNameSequence: derivedNameSequence,
+            identityProfileVersion: IDENTITY_PROFILE_VERSION,
+            identitySetupCompleted: false,
+            blockedUserIds: [],
+            hiddenDirectConversationIds: [],
+          };
 
-  setActivityData({
-    hackathonsJoined: 0,
-    teamsCreated: 0,
-    resourcesShared: 0,
-    eventsAttended: 0,
-  });
-}
+          try {
+            initialProfile.campusConnectId = await ensureCampusConnectId(user);
+          } catch (idError) {
+            console.error("CAMPUS ID CREATION ERROR:", idError);
+          }
+
+          await setDoc(profileRef, initialProfile);
+
+          setProfileData({
+            name: identityName,
+            college: CAMPUSCONNECT_COLLEGE,
+            department: normalizeDepartment(derivedDepartment),
+            year: derivedYear,
+            bio: "",
+            skills: "",
+            email: user.email || "",
+            campusConnectId: initialProfile.campusConnectId || "",
+            lockedNameSequence: derivedNameSequence,
+            identityProfileVersion: IDENTITY_PROFILE_VERSION,
+            identitySetupCompleted: false,
+            blockedUserIds: [],
+            hiddenDirectConversationIds: [],
+          });
+
+          setActivityData({
+            hackathonsJoined: 0,
+            teamsCreated: 0,
+            resourcesShared: 0,
+          });
+
+          identityWelcomePendingRef.current = true;
+          setIdentityNameDraft(identityName);
+          setIdentitySetupError("");
+          setWelcomeOpen(false);
+          setIdentitySetupOpen(true);
+        }
       } catch (error) {
         console.error(
           "PROFILE LOAD ERROR:",
@@ -2600,6 +3021,7 @@ useEffect(() => {
 useEffect(() => {
   if (!authUser) {
     setNotifications([]);
+    notificationSeenIdsRef.current = new Set();
     return;
   }
 
@@ -2618,6 +3040,23 @@ useEffect(() => {
           const bTime = b.createdAt?.toMillis?.() || 0;
           return bTime - aTime;
         });
+
+      const newEnquiry =
+        notificationSeenIdsRef.current.size > 0
+          ? nextNotifications.find(
+              (item) =>
+                item.type === "marketplace_enquiry" &&
+                !notificationSeenIdsRef.current.has(item.id)
+            )
+          : null;
+
+      nextNotifications.forEach((item) => {
+        notificationSeenIdsRef.current.add(item.id);
+      });
+
+      if (newEnquiry) {
+        setMarketplaceEnquiry(newEnquiry);
+      }
 
       setNotifications(nextNotifications);
     },
@@ -2781,7 +3220,8 @@ const uploadProfileMedia = async (fileList) => {
 
   if (invalidFile) {
     showActionToast(
-      "Only images or PDF files up to 10 MB each can be uploaded."
+      "Only images or PDF files up to 10 MB each can be uploaded.",
+      "error"
     );
     return;
   }
@@ -2939,12 +3379,7 @@ const resetMarketplaceForm = () => {
     description: "",
     category: "Textbooks",
     condition: "Good",
-    listingType: "fixed",
     price: "",
-    startingPrice: "",
-    minimumBidIncrement: "50",
-    auctionEndAt: "",
-    paymentMethods: ["cash", "online"],
     handoverLocation: "CIT Campus",
     files: [],
   });
@@ -2955,27 +3390,18 @@ const handleMarketplaceFormChange = (field, value) => {
   setMarketplaceForm((prev) => ({ ...prev, [field]: value }));
 };
 
-const toggleMarketplacePaymentMethod = (method) => {
-  setMarketplaceForm((prev) => {
-    const hasMethod = prev.paymentMethods.includes(method);
-    const nextMethods = hasMethod
-      ? prev.paymentMethods.filter((item) => item !== method)
-      : [...prev.paymentMethods, method];
-
-    return { ...prev, paymentMethods: nextMethods };
-  });
-};
-
 const handleMarketplaceFiles = (fileList) => {
   const files = Array.from(fileList || []);
 
   if (files.length < 1) {
+    setMarketplaceFormError("");
     setMarketplaceForm((prev) => ({ ...prev, files: [] }));
     return;
   }
 
   if (files.length > 6) {
     setMarketplaceFormError("You can add up to 6 product images.");
+    showActionToast("You can add up to 6 product images.", "error");
     return;
   }
 
@@ -2985,6 +3411,7 @@ const handleMarketplaceFiles = (fileList) => {
 
   if (invalid) {
     setMarketplaceFormError("Only images up to 10 MB each are allowed.");
+    showActionToast("Only images up to 10 MB each are allowed.", "error");
     return;
   }
 
@@ -2998,7 +3425,7 @@ const createMarketplaceListing = async () => {
   const form = marketplaceForm;
   const title = form.title.trim();
   const description = form.description.trim();
-  const paymentMethods = form.paymentMethods;
+  const numericPrice = Number(form.price);
 
   if (!title || title.length < 3) {
     setMarketplaceFormError("Enter a product title.");
@@ -3015,54 +3442,37 @@ const createMarketplaceListing = async () => {
     return;
   }
 
-  if (!paymentMethods.length) {
-    setMarketplaceFormError("Select at least one payment method.");
-    return;
-  }
-
-  const numericPrice = Number(form.price);
-  const numericStartingPrice = Number(form.startingPrice);
-  const numericIncrement = Number(form.minimumBidIncrement);
-
-  if (form.listingType === "fixed" && (!Number.isFinite(numericPrice) || numericPrice <= 0)) {
+  if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
     setMarketplaceFormError("Enter a valid selling price.");
     return;
-  }
-
-  if (form.listingType === "auction") {
-    if (!Number.isFinite(numericStartingPrice) || numericStartingPrice <= 0) {
-      setMarketplaceFormError("Enter a valid starting price.");
-      return;
-    }
-
-    if (!Number.isFinite(numericIncrement) || numericIncrement <= 0) {
-      setMarketplaceFormError("Enter a valid minimum bid increment.");
-      return;
-    }
-
-    if (!form.auctionEndAt) {
-      setMarketplaceFormError("Choose when the auction ends.");
-      return;
-    }
-
-    const auctionEnd = new Date(form.auctionEndAt);
-    if (Number.isNaN(auctionEnd.getTime()) || auctionEnd <= new Date()) {
-      setMarketplaceFormError("Auction end time must be in the future.");
-      return;
-    }
   }
 
   setMarketplaceCreating(true);
   setMarketplaceFormError("");
 
   try {
-    const uploadedImages = await uploadMarketplaceImages(form.files);
+    // Keep ImageKit and Firestore errors separate so the UI tells us which
+    // service actually failed instead of reporting both at once.
+    let uploadedImages;
+
+    try {
+      uploadedImages = await uploadMarketplaceImages(form.files);
+    } catch (imageKitError) {
+      console.error("MARKETPLACE IMAGEKIT UPLOAD ERROR:", imageKitError);
+      setMarketplaceFormError(
+        "Product image upload failed. Please check your ImageKit setup and try again."
+      );
+      showActionToast("Image upload failed.");
+      return;
+    }
+
     const profileName =
       profileData.name || authUser.displayName || authUser.email?.split("@")[0] || "CIT Student";
 
     const listingData = {
       sellerId: authUser.uid,
       sellerName: profileName,
+      sellerEmail: authUser.email || "",
       sellerDepartment: profileData.department || "",
       sellerYear: profileData.year || "",
       sellerCampusConnectId: profileData.campusConnectId || "",
@@ -3070,21 +3480,8 @@ const createMarketplaceListing = async () => {
       description,
       category: form.category,
       condition: form.condition,
-      listingType: form.listingType,
-      price: form.listingType === "fixed" ? numericPrice : null,
-      startingPrice: form.listingType === "auction" ? numericStartingPrice : null,
-      currentPrice: form.listingType === "auction" ? numericStartingPrice : null,
-      minimumBidIncrement:
-        form.listingType === "auction" ? numericIncrement : null,
-      auctionEndAt:
-        form.listingType === "auction"
-          ? new Date(form.auctionEndAt)
-          : null,
-      bidCount: 0,
-      highestBidderId: "",
-      highestBidderName: "",
-      lastBidId: "",
-      paymentMethods,
+      listingType: "fixed",
+      price: numericPrice,
       handoverLocation: form.handoverLocation.trim() || "CIT Campus",
       imageUrls: uploadedImages.map((image) => image.url),
       imageThumbnails: uploadedImages.map((image) => image.thumbnailUrl),
@@ -3095,22 +3492,301 @@ const createMarketplaceListing = async () => {
       updatedAt: serverTimestamp(),
     };
 
-    await addDoc(collection(db, "marketplaceListings"), listingData);
+    try {
+      await addDoc(collection(db, "marketplaceListings"), listingData);
+    } catch (firestoreError) {
+      console.error("MARKETPLACE FIRESTORE CREATE ERROR:", firestoreError);
+
+      if (firestoreError?.code === "permission-denied") {
+        setMarketplaceFormError(
+          "Firestore blocked this listing. Update/deploy the marketplace Firestore rules, then try again."
+        );
+        showActionToast("Firestore permission denied.");
+      } else {
+        setMarketplaceFormError(
+          "The listing could not be saved. Please try again."
+        );
+        showActionToast("Unable to save the listing.");
+      }
+      return;
+    }
 
     resetMarketplaceForm();
     setMarketplaceCreateOpen(false);
-    showActionToast(
-      form.listingType === "auction"
-        ? "Auction listing created successfully."
-        : "Marketplace listing created successfully."
-    );
-  } catch (error) {
-    console.error("MARKETPLACE CREATE ERROR:", error);
-    setMarketplaceFormError(
-      "Unable to create the listing. Please check your ImageKit and Firestore setup."
-    );
+    showActionToast("Marketplace listing created successfully.");
   } finally {
     setMarketplaceCreating(false);
+  }
+};
+
+const sendMarketplaceEnquiry = async (listing) => {
+  if (!authUser || !listing?.id) return;
+
+  if (listing.sellerId === authUser.uid) {
+    showActionToast("You cannot enquire about your own listing.");
+    return;
+  }
+
+  try {
+    const requesterName =
+      profileData.name || authUser.displayName || authUser.email?.split("@")[0] || "CIT Student";
+
+    await addDoc(collection(db, "notifications"), {
+      recipientId: listing.sellerId,
+      actorId: authUser.uid,
+      actorName: requesterName,
+      type: "marketplace_enquiry",
+      title: "New Marketplace Enquiry",
+      message: `${requesterName} is interested in your ${listing.title || "item"}.`,
+      relatedId: listing.id,
+      listingId: listing.id,
+      listingTitle: listing.title || "Marketplace item",
+      listingPrice: Number(listing.price || 0),
+      requesterId: authUser.uid,
+      requesterName,
+      requesterEmail: authUser.email || "",
+      requesterDepartment: profileData.department || "",
+      requesterYear: profileData.year || "",
+      read: false,
+      createdAt: serverTimestamp(),
+    });
+
+    showActionToast("Enquiry sent to the seller.");
+  } catch (error) {
+    console.error("MARKETPLACE ENQUIRY ERROR:", error);
+    showActionToast("Unable to send the enquiry right now.");
+  }
+};
+
+const closeMarketplaceEnquiry = async () => {
+  const enquiry = marketplaceEnquiry;
+  setMarketplaceEnquiry(null);
+  if (enquiry?.id && !enquiry.read) {
+    try {
+      await updateDoc(doc(db, "notifications", enquiry.id), { read: true });
+    } catch (error) {
+      console.error("MARKETPLACE ENQUIRY READ ERROR:", error);
+    }
+  }
+};
+
+const getEnquiryPerson = (enquiry) => {
+  if (!enquiry) return null;
+
+  if (enquiry.type === "wanted_enquiry") {
+    return {
+      id: enquiry.helperId || enquiry.actorId,
+      name: enquiry.helperName || enquiry.actorName || "CIT Student",
+      email: enquiry.helperEmail || "",
+      department: enquiry.helperDepartment || "",
+      year: enquiry.helperYear || "",
+      campusConnectId: enquiry.helperCampusConnectId || "",
+    };
+  }
+
+  return {
+    id: enquiry.requesterId || enquiry.actorId,
+    name: enquiry.requesterName || enquiry.actorName || "CIT Student",
+    email: enquiry.requesterEmail || "",
+    department: enquiry.requesterDepartment || "",
+    year: enquiry.requesterYear || "",
+    campusConnectId: enquiry.requesterCampusConnectId || "",
+  };
+};
+
+const startMarketplaceEnquiryChat = async () => {
+  const enquiry = marketplaceEnquiry;
+  const person = getEnquiryPerson(enquiry);
+  if (!person?.id) return;
+
+  await closeMarketplaceEnquiry();
+  await openDirectConversation(person);
+};
+
+const viewMarketplaceEnquiryProfile = async () => {
+  const enquiry = marketplaceEnquiry;
+  const person = getEnquiryPerson(enquiry);
+  if (!person?.id) return;
+
+  await closeMarketplaceEnquiry();
+  await openTeamMemberProfile({
+    memberId: person.id,
+    memberName: person.name,
+  });
+};
+
+const deleteMarketplaceListing = (listing) => {
+  if (!authUser || !listing?.id || listing.sellerId !== authUser.uid) return;
+  setMarketplaceDeleteTarget(listing);
+};
+
+const confirmDeleteMarketplaceListing = async () => {
+  const listing = marketplaceDeleteTarget;
+
+  if (!authUser || !listing || listing.sellerId !== authUser.uid) {
+    setMarketplaceDeleteTarget(null);
+    return;
+  }
+
+  try {
+    await deleteDoc(doc(db, "marketplaceListings", listing.id));
+    setMarketplaceDeleteTarget(null);
+    showActionToast("Listing deleted successfully.");
+  } catch (error) {
+    console.error("MARKETPLACE LISTING DELETE ERROR:", error);
+    showActionToast("Unable to delete the listing right now.");
+  }
+};
+
+const deleteWantedListing = (listing) => {
+  if (!authUser || !listing?.id || listing.requesterId !== authUser.uid) return;
+  setWantedDeleteTarget(listing);
+};
+
+const confirmDeleteWantedListing = async () => {
+  const listing = wantedDeleteTarget;
+  if (!authUser || !listing || listing.requesterId !== authUser.uid) {
+    setWantedDeleteTarget(null);
+    return;
+  }
+
+  try {
+    await deleteDoc(doc(db, "marketplaceListings", listing.id));
+    setWantedListings((prev) => prev.filter((item) => item.id !== listing.id));
+    setWantedDeleteTarget(null);
+    showActionToast("Wanted post deleted successfully.");
+  } catch (error) {
+    console.error("WANTED LISTING DELETE ERROR:", error);
+    showActionToast("Unable to delete the wanted post right now.");
+  }
+};
+
+const deleteTradeGiveListing = (listing) => {
+  if (!authUser || !listing?.id || listing.ownerId !== authUser.uid) return;
+  setTradeGiveDeleteTarget(listing);
+};
+
+const confirmDeleteTradeGiveListing = async () => {
+  const listing = tradeGiveDeleteTarget;
+  if (!authUser || !listing || listing.ownerId !== authUser.uid) {
+    setTradeGiveDeleteTarget(null);
+    return;
+  }
+
+  try {
+    await deleteDoc(doc(db, "tradeGiveListings", listing.id));
+    setTradeGiveListings((prev) => prev.filter((item) => item.id !== listing.id));
+    setTradeGiveSelectedListing((prev) => prev?.id === listing.id ? null : prev);
+    setTradeGiveDeleteTarget(null);
+    showActionToast("Trade or Give listing deleted successfully.");
+  } catch (error) {
+    console.error("TRADE GIVE LISTING DELETE ERROR:", error);
+    showActionToast("Unable to delete this listing right now.");
+  }
+};
+
+const resetWantedForm = () => {
+  setWantedForm({
+    title: "",
+    description: "",
+    category: "Electronics",
+    budget: "",
+    condition: "Any",
+  });
+  setWantedError("");
+};
+
+const createWantedListing = async () => {
+  if (!authUser) return;
+
+  const title = wantedForm.title.trim();
+  const description = wantedForm.description.trim();
+  const budget = Number(wantedForm.budget);
+
+  if (!title || title.length < 3) {
+    setWantedError("Enter what you are looking for.");
+    return;
+  }
+  if (!description || description.length < 5) {
+    setWantedError("Add a short description of what you need.");
+    return;
+  }
+  if (wantedForm.budget && (!Number.isFinite(budget) || budget < 0)) {
+    setWantedError("Enter a valid budget or leave it blank.");
+    return;
+  }
+
+  setWantedCreating(true);
+  setWantedError("");
+
+  try {
+    const requesterName =
+      profileData.name || authUser.displayName || authUser.email?.split("@")[0] || "CIT Student";
+
+    await addDoc(collection(db, "marketplaceListings"), {
+      requesterId: authUser.uid,
+      requesterName,
+      requesterEmail: authUser.email || "",
+      requesterDepartment: profileData.department || "",
+      requesterYear: profileData.year || "",
+      title,
+      description,
+      category: wantedForm.category,
+      budget: wantedForm.budget ? budget : null,
+      condition: wantedForm.condition,
+      listingType: "wanted",
+      status: "active",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    resetWantedForm();
+    setWantedCreateOpen(false);
+    showActionToast("Wanted post created successfully.");
+  } catch (error) {
+    console.error("WANTED LISTING CREATE ERROR:", error);
+    setWantedError("Unable to create the wanted post right now.");
+  } finally {
+    setWantedCreating(false);
+  }
+};
+
+const sendWantedEnquiry = async (listing) => {
+  if (!authUser || !listing?.id) return;
+
+  if (listing.requesterId === authUser.uid) {
+    showActionToast("You cannot enquire about your own wanted post.");
+    return;
+  }
+
+  try {
+    const helperName =
+      profileData.name || authUser.displayName || authUser.email?.split("@")[0] || "CIT Student";
+
+    await addDoc(collection(db, "notifications"), {
+      recipientId: listing.requesterId,
+      actorId: authUser.uid,
+      actorName: helperName,
+      type: "wanted_enquiry",
+      title: "Someone Can Help With Your Wanted Item",
+      message: `${helperName} may have what you're looking for: ${listing.title || "your wanted item"}.`,
+      relatedId: listing.id,
+      listingId: listing.id,
+      listingTitle: listing.title || "Wanted item",
+      requesterId: listing.requesterId,
+      helperId: authUser.uid,
+      helperName,
+      helperEmail: authUser.email || "",
+      helperDepartment: profileData.department || "",
+      helperYear: profileData.year || "",
+      read: false,
+      createdAt: serverTimestamp(),
+    });
+
+    showActionToast("Your interest was sent to the student.");
+  } catch (error) {
+    console.error("WANTED ENQUIRY ERROR:", error);
+    showActionToast("Unable to send your response right now.");
   }
 };
 
@@ -3157,12 +3833,14 @@ const handleTradeGiveFiles = (fileList) => {
   const files = Array.from(fileList || []);
 
   if (files.length < 1) {
+    setTradeGiveError("");
     setTradeGiveForm((prev) => ({ ...prev, files: [] }));
     return;
   }
 
   if (files.length > 6) {
     setTradeGiveError("You can add up to 6 item images.");
+    showActionToast("You can add up to 6 item images.", "error");
     return;
   }
 
@@ -3172,6 +3850,7 @@ const handleTradeGiveFiles = (fileList) => {
 
   if (invalid) {
     setTradeGiveError("Only images up to 10 MB each are allowed.");
+    showActionToast("Only images up to 10 MB each are allowed.", "error");
     return;
   }
 
@@ -3239,6 +3918,7 @@ const createTradeGiveListing = async () => {
     await addDoc(collection(db, "tradeGiveListings"), {
       ownerId: authUser.uid,
       ownerName: profileName,
+      ownerEmail: authUser.email || "",
       ownerDepartment: profileData.department || "",
       ownerYear: profileData.year || "",
       ownerCampusConnectId: profileData.campusConnectId || "",
@@ -3465,200 +4145,14 @@ useEffect(() => {
   return () => unsubscribe();
 }, [authUser, tradeGiveSelectedListing?.id, tradeGiveSelectedListing?.ownerId]);
 
-const loadMarketplaceBidHistory = (listing) => {
-  if (!listing?.id) return;
-
-  setMarketplaceSelectedAuction(listing);
-};
-
-// Keep the selected auction's bid history live.
-// New bids appear automatically without reopening the auction.
-useEffect(() => {
-  if (!authUser || !marketplaceSelectedAuction?.id) {
-    setMarketplaceBidHistory([]);
-    setMarketplaceBidHistoryLoading(false);
-    return undefined;
-  }
-
-  setMarketplaceBidHistoryLoading(true);
-
-  const bidsQuery = query(
-    collection(db, "marketplaceBids"),
-    where(
-      "listingId",
-      "==",
-      marketplaceSelectedAuction.id
-    )
-  );
-
-  const unsubscribe = onSnapshot(
-    bidsQuery,
-    (snapshot) => {
-      const bids = snapshot.docs
-        .map((bidDoc) => ({
-          id: bidDoc.id,
-          ...bidDoc.data(),
-        }))
-        .sort((a, b) => {
-          const amountDifference =
-            Number(b.amount || 0) -
-            Number(a.amount || 0);
-
-          if (amountDifference !== 0) {
-            return amountDifference;
-          }
-
-          const aTime =
-            a.createdAt?.toMillis?.() || 0;
-
-          const bTime =
-            b.createdAt?.toMillis?.() || 0;
-
-          return bTime - aTime;
-        });
-
-      setMarketplaceBidHistory(bids);
-      setMarketplaceBidHistoryLoading(false);
-    },
-    (error) => {
-      console.error(
-        "MARKETPLACE BID HISTORY ERROR:",
-        error
-      );
-
-      setMarketplaceBidHistory([]);
-      setMarketplaceBidHistoryLoading(false);
-    }
-  );
-
-  return () => unsubscribe();
-}, [
-  authUser,
-  marketplaceSelectedAuction?.id,
-]);
-
-const placeMarketplaceBid = async (listing, amountValue) => {
-  if (!authUser || !listing?.id) return;
-
-  const amount = Number(amountValue);
-  const currentPrice = Number(listing.currentPrice || listing.startingPrice || 0);
-  const minimumIncrement = Number(listing.minimumBidIncrement || 1);
-
-  if (listing.sellerId === authUser.uid) {
-    showActionToast("You cannot bid on your own listing.");
-    return;
-  }
-
-  if (listing.listingType !== "auction" || listing.status !== "active") {
-    showActionToast("This auction is not active.");
-    return;
-  }
-
-  const endDate = listing.auctionEndAt?.toDate?.() || new Date(listing.auctionEndAt);
-  if (!endDate || Number.isNaN(endDate.getTime()) || endDate <= new Date()) {
-    showActionToast("This auction has ended.");
-    return;
-  }
-
-  if (!Number.isFinite(amount) || amount < currentPrice + minimumIncrement) {
-    showActionToast(
-      `Minimum next bid is ₹${Math.ceil(currentPrice + minimumIncrement)}`
-    );
-    return;
-  }
-
-  setMarketplaceBidLoading(true);
-
-  try {
-    const listingRef = doc(db, "marketplaceListings", listing.id);
-    const bidRef = doc(collection(db, "marketplaceBids"));
-    const bidderName =
-      profileData.name || authUser.displayName || authUser.email?.split("@")[0] || "CIT Student";
-
-    await runTransaction(db, async (transaction) => {
-      const listingSnapshot = await transaction.get(listingRef);
-
-      if (!listingSnapshot.exists()) {
-        throw new Error("LISTING_NOT_FOUND");
-      }
-
-      const liveListing = listingSnapshot.data();
-      const liveCurrentPrice = Number(
-        liveListing.currentPrice || liveListing.startingPrice || 0
-      );
-      const liveIncrement = Number(liveListing.minimumBidIncrement || 1);
-      const liveEnd =
-        liveListing.auctionEndAt?.toDate?.() || new Date(liveListing.auctionEndAt);
-
-      if (liveListing.sellerId === authUser.uid) {
-        throw new Error("OWN_LISTING");
-      }
-
-      if (liveListing.listingType !== "auction" || liveListing.status !== "active") {
-        throw new Error("AUCTION_INACTIVE");
-      }
-
-      if (!liveEnd || Number.isNaN(liveEnd.getTime()) || liveEnd <= new Date()) {
-        throw new Error("AUCTION_ENDED");
-      }
-
-      if (amount < liveCurrentPrice + liveIncrement) {
-        throw new Error("BID_TOO_LOW");
-      }
-
-      transaction.set(bidRef, {
-        listingId: listing.id,
-        bidderId: authUser.uid,
-        bidderName,
-        amount,
-        createdAt: serverTimestamp(),
-      });
-
-      transaction.update(listingRef, {
-        currentPrice: amount,
-        highestBidderId: authUser.uid,
-        highestBidderName: bidderName,
-        bidCount: increment(1),
-        lastBidId: bidRef.id,
-        updatedAt: serverTimestamp(),
-      });
-    });
-
-    setMarketplaceSelectedAuction((prev) =>
-      prev?.id === listing.id
-        ? {
-            ...prev,
-            currentPrice: amount,
-            highestBidderId: authUser.uid,
-            highestBidderName: bidderName,
-            bidCount:
-              Number(prev.bidCount || 0) + 1,
-          }
-        : prev
-    );
-
-    showActionToast("Bid placed successfully.");
-  } catch (error) {
-    console.error("MARKETPLACE BID ERROR:", error);
-
-    const messages = {
-      OWN_LISTING: "You cannot bid on your own listing.",
-      AUCTION_INACTIVE: "This auction is no longer active.",
-      AUCTION_ENDED: "This auction has ended.",
-      BID_TOO_LOW: "Another bid was placed first. Enter a higher bid.",
-      LISTING_NOT_FOUND: "This listing no longer exists.",
-    };
-
-    showActionToast(messages[error.message] || "Unable to place the bid.");
-  } finally {
-    setMarketplaceBidLoading(false);
-  }
-};
-
 const normalizedCommunitySearch = communitySearch.toLowerCase().trim();
 const [shareResourceOpen, setShareResourceOpen] = useState(false);
+const [shareResourceCategory, setShareResourceCategory] = useState("");
+const [shareResourceImageFile, setShareResourceImageFile] = useState(null);
+const [shareResourceUploading, setShareResourceUploading] = useState(false);
 const [shareSuccess, setShareSuccess] = useState(false);
 const [actionToast, setActionToast] = useState("");
+const [actionToastTone, setActionToastTone] = useState("success");
   const [deleteResourceTarget, setDeleteResourceTarget] = useState(null);
 const filteredCommunityResources = communityResources.filter((resource) => {
   const matchesCategory =
@@ -3677,13 +4171,62 @@ const filteredCommunityResources = communityResources.filter((resource) => {
 
   return matchesCategory && matchesSearch;
 });
-const showActionToast = (message) => {
+const showActionToast = (message, tone = "success") => {
   setActionToast(message);
+  setActionToastTone(tone);
 
   setTimeout(() => {
     setActionToast("");
   }, 3000);
 };
+
+  const uploadShareResourceImage = async (file) => {
+    if (!file || !authUser) return null;
+
+    const imageKitAuth = await getImageKitAuth(authUser);
+    const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+
+    const uploaded = await imageKitUpload({
+      file,
+      fileName: `${authUser.uid}-${Date.now()}-${safeFileName}`,
+      publicKey: imageKitAuth.publicKey,
+      signature: imageKitAuth.signature,
+      token: imageKitAuth.token,
+      expire: imageKitAuth.expire,
+      folder: `/campusconnect/community-resources/${authUser.uid}`,
+      useUniqueFileName: true,
+    });
+
+    return {
+      url: uploaded.url,
+      thumbnailUrl: uploaded.thumbnailUrl || uploaded.url,
+      fileId: uploaded.fileId || "",
+      fileName: file.name,
+    };
+  };
+
+  const handleShareResourceImage = (fileList) => {
+    const file = Array.from(fileList || [])[0];
+
+    if (!file) {
+      setShareResourceImageFile(null);
+      return;
+    }
+
+    const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
+
+    if (
+      !allowedTypes.includes(file.type) ||
+      file.size > 3 * 1024 * 1024
+    ) {
+      setShareResourceImageFile(null);
+      showActionToast("Use one JPG, PNG, or WebP image up to 3 MB.", "error");
+      return;
+    }
+
+    setShareResourceImageFile(file);
+  };
+
 
   const handleDeleteResource = (resource) => {
     if (
@@ -3761,17 +4304,75 @@ const showActionToast = (message) => {
 const handleNavigation = (id) => {
   setActiveNav(id);
   setProfilePageOpen(false);
+  navigationLockUntilRef.current = Date.now() + 1200;
 
   const element = document.getElementById(id);
   if (!element) return;
 
   requestAnimationFrame(() => {
+    const isCompactViewport =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(max-width: 820px)")?.matches;
+
+    if (isCompactViewport) {
+      // The app stylesheet enables smooth scrolling on <html>. With
+      // scrollIntoView({ behavior: "auto" }), that CSS rule can still make
+      // mobile sidebar navigation animate slowly. Temporarily disable the
+      // CSS smooth-scroll rule for this single navigation action so the
+      // section change starts immediately on phones/tablets. Desktop keeps
+      // the existing smooth navigation exactly as before.
+      const root = document.documentElement;
+      const body = document.body;
+      const previousRootBehavior = root.style.scrollBehavior;
+      const previousBodyBehavior = body?.style.scrollBehavior || "";
+
+      root.style.scrollBehavior = "auto";
+      if (body) body.style.scrollBehavior = "auto";
+
+      element.scrollIntoView({
+        behavior: "auto",
+        block: "start",
+      });
+
+      root.style.scrollBehavior = previousRootBehavior;
+      if (body) body.style.scrollBehavior = previousBodyBehavior;
+      return;
+    }
+
     element.scrollIntoView({
       behavior: "smooth",
       block: "start",
     });
   });
 };
+
+useEffect(() => {
+  if (!authUser || profilePageOpen) return undefined;
+
+  const sectionIds = ["home", "hackathons", "teams", "messages", "resources"];
+  const updateActiveSection = () => {
+    if (Date.now() < navigationLockUntilRef.current) return;
+
+    const marker = window.scrollY + Math.min(170, window.innerHeight * 0.24);
+    let current = "home";
+    sectionIds.forEach((id) => {
+      const section = document.getElementById(id);
+      if (!section) return;
+      const sectionTop = section.getBoundingClientRect().top + window.scrollY;
+      if (sectionTop <= marker) current = id;
+    });
+
+    setActiveNav((previous) => previous === current ? previous : current);
+  };
+
+  updateActiveSection();
+  window.addEventListener("scroll", updateActiveSection, { passive: true });
+  window.addEventListener("resize", updateActiveSection);
+  return () => {
+    window.removeEventListener("scroll", updateActiveSection);
+    window.removeEventListener("resize", updateActiveSection);
+  };
+}, [authUser, profilePageOpen]);
 
 const getDirectConversationId = (otherUserId) => {
   if (!authUser?.uid || !otherUserId) return null;
@@ -3795,6 +4396,11 @@ const getDirectOtherParticipant = (conversation) => {
 
 const openDirectConversation = async (student) => {
   if (!authUser || !student?.id || student.id === authUser.uid) return;
+
+  if (blockedUserIds.includes(student.id)) {
+    showActionToast("This student is blocked. Unblock them before starting a conversation.");
+    return;
+  }
 
   setDirectMessageOpening(true);
 
@@ -3851,11 +4457,187 @@ const openDirectConversation = async (student) => {
   }
 };
 
+const getDirectConversationTarget = (conversation = directConversation) => {
+  const other = getDirectOtherParticipant(conversation);
+  return other?.id ? { id: other.id, name: other.name || "CIT Student" } : null;
+};
+
+// Connected students who do not already have an active visible conversation.
+// Existing conversations remain in the Conversations list below, so together
+// these two sections cover every current connection without unnecessary duplicates.
+const connectedStudentsForMessages = useMemo(() => {
+  if (!authUser?.uid) return [];
+
+  const activeConversationParticipantIds = new Set(
+    directConversations
+      .map((conversation) =>
+        Array.isArray(conversation.memberIds)
+          ? conversation.memberIds.find((id) => id !== authUser.uid)
+          : null
+      )
+      .filter(Boolean)
+  );
+
+  return connections
+    .map((connection) => {
+      const otherId = Array.isArray(connection.userIds)
+        ? connection.userIds.find((id) => id !== authUser.uid)
+        : null;
+      if (!otherId || blockedUserIds.includes(otherId)) return null;
+
+      const person = teammates.find((item) => item.id === otherId);
+      return person || {
+        id: otherId,
+        name: "Connected Student",
+        campusConnectId: "",
+      };
+    })
+    .filter(Boolean)
+    .filter((person) => !activeConversationParticipantIds.has(person.id))
+    .sort((a, b) =>
+      (a.name || "Connected Student").localeCompare(
+        b.name || "Connected Student",
+        undefined,
+        { sensitivity: "base" }
+      )
+    );
+}, [connections, teammates, directConversations, blockedUserIds, authUser?.uid]);
+
+const requestDirectConversationAction = (action) => {
+  const target = getDirectConversationTarget();
+  if (!target) return;
+  setDirectConversationMenu(false);
+  setDirectConversationConfirm({
+    action,
+    userId: target.id,
+    userName: target.name,
+  });
+};
+
+const executeDirectConversationAction = async () => {
+  if (!authUser || !directConversationConfirm?.userId) return;
+
+  const { action, userId, userName } = directConversationConfirm;
+
+  try {
+    if (action === "block") {
+      await updateDoc(doc(db, "users", authUser.uid), {
+        blockedUserIds: arrayUnion(userId),
+      });
+      setBlockedUserIds((prev) => prev.includes(userId) ? prev : [...prev, userId]);
+      setDirectConversationConfirm(null);
+      setDirectConversationMenu(false);
+      setDirectConversation(null);
+      setDirectMessages([]);
+      setDirectMessageInput("");
+      showActionToast(`${userName} has been blocked.`);
+      return;
+    }
+
+    if (action === "unblock") {
+      await updateDoc(doc(db, "users", authUser.uid), {
+        blockedUserIds: arrayRemove(userId),
+      });
+      setBlockedUserIds((prev) => prev.filter((id) => id !== userId));
+      setDirectConversationConfirm(null);
+      showActionToast(`${userName} has been unblocked.`);
+      return;
+    }
+
+    if (action === "delete") {
+      const conversationId = directConversation?.id;
+      if (!conversationId) return;
+
+      await updateDoc(doc(db, "users", authUser.uid), {
+        hiddenDirectConversationIds: arrayUnion(conversationId),
+      });
+      setHiddenDirectConversationIds((prev) =>
+        prev.includes(conversationId) ? prev : [...prev, conversationId]
+      );
+      setDirectConversations((prev) =>
+        prev.filter((conversation) => conversation.id !== conversationId)
+      );
+      setDirectConversationConfirm(null);
+      setDirectConversationMenu(false);
+      setDirectConversation(null);
+      setDirectMessages([]);
+      setDirectMessageInput("");
+      setDirectMessageMediaFiles([]);
+      showActionToast("Conversation deleted for you.");
+    }
+  } catch (error) {
+    console.error("DIRECT CONVERSATION ACTION ERROR:", error);
+    showActionToast(
+      action === "block"
+        ? "Unable to block this student."
+        : action === "unblock"
+          ? "Unable to unblock this student."
+          : "Unable to delete this conversation."
+    );
+  }
+};
+
+const handleDirectMessageMediaFiles = (fileList) => {
+  const files = Array.from(fileList || []);
+
+  if (!files.length) return;
+
+  if (files.length > 3) {
+    setDirectMessageMediaFiles([]);
+    showActionToast("You can send up to 3 images per message.", "error");
+    return;
+  }
+
+  const invalid = files.find(
+    (file) => !file.type?.startsWith("image/") || file.size > 4 * 1024 * 1024
+  );
+
+  if (invalid) {
+    setDirectMessageMediaFiles([]);
+    showActionToast("Only images up to 4 MB each are allowed.", "error");
+    return;
+  }
+
+  setDirectMessageMediaFiles(files);
+};
+
+const uploadDirectMessageImages = async (files) => {
+  const imageKitAuth = await getImageKitAuth(authUser);
+  const uploadedImages = [];
+
+  for (const file of files) {
+    const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const fileName = `${authUser.uid}-${Date.now()}-${safeFileName}`;
+
+    const uploaded = await imageKitUpload({
+      file,
+      fileName,
+      publicKey: imageKitAuth.publicKey,
+      signature: imageKitAuth.signature,
+      token: imageKitAuth.token,
+      expire: imageKitAuth.expire,
+      folder: `/campusconnect/direct-messages/${authUser.uid}`,
+      useUniqueFileName: true,
+    });
+
+    uploadedImages.push({
+      url: uploaded.url,
+      thumbnailUrl: uploaded.thumbnailUrl || uploaded.url,
+      fileId: uploaded.fileId || "",
+      fileName: file.name,
+    });
+  }
+
+  return uploadedImages;
+};
+
 const sendDirectMessage = async () => {
   if (!authUser || !directConversation?.id || directMessageSending) return;
 
   const message = directMessageInput.trim();
-  if (!message) return;
+  const mediaFiles = directMessageMediaFiles;
+
+  if (!message && mediaFiles.length === 0) return;
 
   if (message.length > 2000) {
     showActionToast("Messages can be up to 2000 characters.");
@@ -3865,9 +4647,36 @@ const sendDirectMessage = async () => {
   const otherParticipant = getDirectOtherParticipant(directConversation);
   if (!otherParticipant?.id) return;
 
+  if (blockedUserIds.includes(otherParticipant.id)) {
+    showActionToast("Unblock this student before sending messages.");
+    return;
+  }
+
+  try {
+    const recipientSnap = await getDoc(doc(db, "users", otherParticipant.id));
+    const recipientBlockedIds = Array.isArray(recipientSnap.data()?.blockedUserIds)
+      ? recipientSnap.data().blockedUserIds
+      : [];
+
+    if (recipientBlockedIds.includes(authUser.uid)) {
+      showActionToast("You cannot message this student because they have blocked you.");
+      return;
+    }
+  } catch (error) {
+    console.error("DIRECT MESSAGE BLOCK CHECK ERROR:", error);
+    showActionToast("Unable to verify messaging permissions. Please try again.");
+    return;
+  }
+
   setDirectMessageSending(true);
 
   try {
+    const uploadedMedia = mediaFiles.length
+      ? await uploadDirectMessageImages(mediaFiles)
+      : [];
+
+    const lastMessage = message || `📷 ${uploadedMedia.length} image${uploadedMedia.length === 1 ? "" : "s"}`;
+
     await addDoc(
       collection(
         db,
@@ -3880,6 +4689,7 @@ const sendDirectMessage = async () => {
         senderId: authUser.uid,
         recipientId: otherParticipant.id,
         message,
+        media: uploadedMedia,
         senderName: profileData.name || authUser.displayName || "CIT Student",
         createdAt: serverTimestamp(),
       }
@@ -3888,7 +4698,7 @@ const sendDirectMessage = async () => {
     await updateDoc(
       doc(db, "directConversations", directConversation.id),
       {
-        lastMessage: message,
+        lastMessage,
         lastMessageAt: serverTimestamp(),
         lastSenderId: authUser.uid,
         updatedAt: serverTimestamp(),
@@ -3898,6 +4708,7 @@ const sendDirectMessage = async () => {
     );
 
     setDirectMessageInput("");
+    setDirectMessageMediaFiles([]);
   } catch (error) {
     console.error("DIRECT MESSAGE SEND ERROR:", error);
     showActionToast("Unable to send the message. Please try again.");
@@ -3905,7 +4716,6 @@ const sendDirectMessage = async () => {
     setDirectMessageSending(false);
   }
 };
-
 
 const submitDirectMessageReport = async () => {
   const target = directMessageReportTarget;
@@ -3959,6 +4769,8 @@ const closeDirectConversation = () => {
   setDirectConversation(null);
   setDirectMessages([]);
   setDirectMessageInput("");
+  setDirectMessageMediaFiles([]);
+  setDirectConversationMenu(false);
 };
 
 
@@ -4013,82 +4825,6 @@ const closeDirectConversation = () => {
       console.error("HACKATHON INTEREST ERROR:", error);
       showActionToast("Unable to update your interest. Please try again.");
     } finally { setHackathonInterestLoading(false); }
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadEventInterests = async () => {
-      if (!authUser) {
-        setEventInterestIds(new Set());
-        return;
-      }
-      try {
-        const snapshot = await getDocs(
-          query(
-            collection(db, "eventInterests"),
-            where("userId", "==", authUser.uid)
-          )
-        );
-        const ids = new Set();
-        snapshot.forEach((item) => {
-          const data = item.data();
-          if (data.eventId) ids.add(data.eventId);
-        });
-        if (!cancelled) setEventInterestIds(ids);
-      } catch (error) {
-        console.error("EVENT INTEREST LOAD ERROR:", error);
-      }
-    };
-    loadEventInterests();
-    return () => { cancelled = true; };
-  }, [authUser]);
-
-  const toggleEventInterest = async (event) => {
-    if (!authUser) {
-      showActionToast("Please sign in to save your interest.");
-      return;
-    }
-
-    const eventId = event?.id;
-    if (!eventId) {
-      showActionToast("This event is missing its Firebase ID.");
-      return;
-    }
-
-    const interestRef = doc(db, "eventInterests", `${authUser.uid}_${eventId}`);
-    const isInterested = eventInterestIds.has(eventId);
-    setEventInterestLoading(true);
-
-    try {
-      if (isInterested) {
-        await deleteDoc(interestRef);
-        setEventInterestIds((prev) => {
-          const next = new Set(prev);
-          next.delete(eventId);
-          return next;
-        });
-        showActionToast("Removed from your interested events.");
-      } else {
-        await setDoc(interestRef, {
-          userId: authUser.uid,
-          userName: profileData.name || authUser.email || "CIT Student",
-          eventId,
-          eventName: event.title || event.name || "Campus Event",
-          createdAt: serverTimestamp(),
-        });
-        setEventInterestIds((prev) => {
-          const next = new Set(prev);
-          next.add(eventId);
-          return next;
-        });
-        showActionToast("Event saved to your interests!");
-      }
-    } catch (error) {
-      console.error("EVENT INTEREST ERROR:", error);
-      showActionToast("Unable to update your interest. Please try again.");
-    } finally {
-      setEventInterestLoading(false);
-    }
   };
 
 const handleCreateTeam = async (e) => {
@@ -4792,7 +5528,6 @@ setViewedProfile({
     hackathonsJoined: Number(data.hackathonsJoined) || 0,
     teamsCreated: Number(data.teamsCreated) || 0,
     resourcesShared: Number(data.resourcesShared) || 0,
-    eventsAttended: Number(data.eventsAttended) || 0,
   },
 });
     setProfilePageOpen(true);
@@ -5157,8 +5892,24 @@ const confirmDeleteTeam = async () => {
 };
 
 const openTeamStatus = async (team) => {
-  if (!authUser || !team?.id || team.createdBy !== authUser.uid) return;
+  if (!authUser || !team?.id) return;
 
+  const isOwner = team.createdBy === authUser.uid;
+  const isMember =
+    isOwner ||
+    userTeams.some((item) => item.id === team.id) ||
+    teamMemberships.some(
+      (membership) =>
+        membership.teamId === team.id &&
+        membership.memberId === authUser.uid
+    );
+
+  if (!isMember) {
+    showActionToast("You must be a member of this team to view its status.");
+    return;
+  }
+
+  setTeamStatusReadOnly(!isOwner);
   setSelectedTeam(team);
   setSelectedTeamMembers([]);
   setSelectedTeamPendingInvites([]);
@@ -5223,19 +5974,6 @@ const openTeamStatus = async (team) => {
 
     const rows = await Promise.all(
       actualMemberIds.map(async (memberId) => {
-        if (memberId === latestTeam.createdBy) {
-          return {
-            id: `owner_${latestTeam.id}`,
-            memberId,
-            memberName:
-              profileData.name ||
-              latestTeam.createdByName ||
-              authUser.email ||
-              "Team Owner",
-            role: "owner",
-          };
-        }
-
         const membership = membershipRows.find(
           (item) => item.memberId === memberId
         );
@@ -5253,15 +5991,20 @@ const openTeamStatus = async (team) => {
           );
 
           return {
-            id: `member_${memberId}`,
+            id: memberId === latestTeam.createdBy
+              ? `owner_${latestTeam.id}`
+              : `member_${memberId}`,
             memberId,
             memberName:
               data.name ||
               data.email?.split("@")[0] ||
               membership?.memberName ||
               fallback?.name ||
-              "CIT Student",
-            role: membership?.role || "member",
+              (memberId === latestTeam.createdBy ? "Team Owner" : "CIT Student"),
+            role:
+              memberId === latestTeam.createdBy
+                ? "owner"
+                : membership?.role || "member",
           };
         } catch (memberError) {
           console.error("TEAM MEMBER LOAD ERROR:", memberError);
@@ -5271,13 +6014,18 @@ const openTeamStatus = async (team) => {
           );
 
           return {
-            id: `member_${memberId}`,
+            id: memberId === latestTeam.createdBy
+              ? `owner_${latestTeam.id}`
+              : `member_${memberId}`,
             memberId,
             memberName:
               membership?.memberName ||
               fallback?.name ||
-              "CIT Student",
-            role: membership?.role || "member",
+              (memberId === latestTeam.createdBy ? "Team Owner" : "CIT Student"),
+            role:
+              memberId === latestTeam.createdBy
+                ? "owner"
+                : membership?.role || "member",
           };
         }
       })
@@ -5285,37 +6033,44 @@ const openTeamStatus = async (team) => {
 
     setSelectedTeamMembers(rows);
 
-    // Only PENDING invitations are shown as pending.
-    // An "accepted" invitation by itself does NOT mean the student
-    // is currently a team member; the membership document must exist.
-    try {
-      const invitationsSnap = await withTimeout(
-        getDocs(
-          query(
-            collection(db, "teamInvitations"),
-            where("teamId", "==", latestTeam.id)
-          )
-        ),
-        10000,
-        "Team invitation status load"
-      );
-
-      const pendingInvites = invitationsSnap.docs
-        .map((d) => ({
-          id: d.id,
-          ...d.data(),
-        }))
-        .filter(
-          (invitation) => invitation.status === "pending"
+    // Only the team owner needs the pending-invitation list here.
+    // A normal member can still see Team Status and joined members, but
+    // does not need to read other students' invitation documents.
+    // Skipping that owner-only read prevents a harmless Firestore
+    // permission warning in the member/read-only Team Status view.
+    if (isOwner) {
+      try {
+        const invitationsSnap = await withTimeout(
+          getDocs(
+            query(
+              collection(db, "teamInvitations"),
+              where("teamId", "==", latestTeam.id)
+            )
+          ),
+          10000,
+          "Team invitation status load"
         );
 
-      setSelectedTeamPendingInvites(pendingInvites);
-    } catch (inviteError) {
-      console.error(
-        "TEAM INVITATION STATUS ERROR:",
-        inviteError
-      );
+        const pendingInvites = invitationsSnap.docs
+          .map((d) => ({
+            id: d.id,
+            ...d.data(),
+          }))
+          .filter(
+            (invitation) => invitation.status === "pending"
+          );
 
+        setSelectedTeamPendingInvites(pendingInvites);
+      } catch (inviteError) {
+        console.error(
+          "TEAM INVITATION STATUS ERROR:",
+          inviteError
+        );
+
+        setSelectedTeamPendingInvites([]);
+      }
+    } else {
+      // Members do not need to inspect pending invitations.
       setSelectedTeamPendingInvites([]);
     }
   } catch (error) {
@@ -5328,6 +6083,27 @@ const openTeamStatus = async (team) => {
     }
   } finally {
     setTeamStatusLoading(false);
+  }
+};
+
+const dismissWelcome = async () => {
+  if (!authUser || welcomeSaving) return;
+
+  setWelcomeSaving(true);
+  setWelcomeOpen(false);
+
+  try {
+    await setDoc(
+      doc(db, "users", authUser.uid),
+      { welcomeSeen: true },
+      { merge: true }
+    );
+  } catch (error) {
+    console.error("WELCOME SEEN SAVE ERROR:", error);
+    setWelcomeOpen(true);
+    showActionToast("Unable to save the welcome message status.");
+  } finally {
+    setWelcomeSaving(false);
   }
 };
 
@@ -5609,7 +6385,10 @@ useEffect(() => {
           return bTime - aTime;
         });
 
-      setDirectConversations(conversations);
+      const visibleConversations = conversations.filter(
+        (conversation) => !hiddenDirectConversationIds.includes(conversation.id)
+      );
+      setDirectConversations(visibleConversations);
       setDirectConversationsLoading(false);
     },
     (error) => {
@@ -5620,7 +6399,7 @@ useEffect(() => {
   );
 
   return () => unsubscribe();
-}, [authUser]);
+}, [authUser, hiddenDirectConversationIds]);
 
 // Live messages for the selected direct conversation.
 useEffect(() => {
@@ -6521,17 +7300,9 @@ const respondToTeamInvitation = async (invitation, decision) => {
 
 const getOpportunityUrl = (item) => getOpportunityOfficialUrl(item);
 
-const getEventDashboardUrl = (event) => {
-  if (!event) return "";
-  const candidates = [event.dashboardUrl, event.sourceDashboardUrl, event.sourceUrl];
-  return candidates.find((value) => typeof value === "string" && value.trim())?.trim() || "";
-};
 
 const getOpportunityCategory = (item) =>
   (item?.category || item?.type || item?.domain || "").toString().trim();
-
-const getOpportunityDepartment = (item) =>
-  (item?.department || item?.organizingDepartment || item?.dept || "").toString().trim();
 
 const getOpportunityYear = (item) =>
   (item?.year || item?.eligibleYear || item?.eligibleYears || item?.targetYear || "").toString().trim();
@@ -6547,7 +7318,6 @@ const getDataIcon = (iconName, fallback = Code2) => {
     code2: Code2,
     palette: Palette,
     database: Database,
-    calendar: CalendarDays,
     megaphone: Megaphone,
   };
 
@@ -6564,9 +7334,8 @@ const competitionFilterSource = showAllCompetitions && allCompetitions.length ? 
 
 const hackathonFilterOptions = useMemo(() => {
   const categories = [...new Set(competitionFilterSource.map(getOpportunityCategory).filter(Boolean))].sort();
-  const departments = [...new Set(competitionFilterSource.map(getOpportunityDepartment).filter(Boolean))].sort();
   const years = [...new Set(competitionFilterSource.map(getOpportunityYear).filter(Boolean))].sort();
-  return { categories, departments, years };
+  return { categories, years };
 }, [competitionFilterSource]);
 
 const filterCompetitionList = (items) => {
@@ -6586,9 +7355,8 @@ const filterCompetitionList = (items) => {
 
     const matchesSearch = !normalizedSearch || searchableText.includes(normalizedSearch);
     const matchesCategory = !hackathonCategoryFilter || getOpportunityCategory(competition) === hackathonCategoryFilter;
-    const matchesDepartment = !hackathonDepartmentFilter || getOpportunityDepartment(competition) === hackathonDepartmentFilter;
     const matchesYear = !hackathonYearFilter || getOpportunityYear(competition) === hackathonYearFilter;
-    return matchesSearch && matchesCategory && matchesDepartment && matchesYear;
+    return matchesSearch && matchesCategory && matchesYear;
   });
 
   return [...filtered].sort((a, b) => {
@@ -6600,12 +7368,12 @@ const filterCompetitionList = (items) => {
 
 const filteredOpportunityHackathons = useMemo(
   () => filterCompetitionList(hackathons),
-  [hackathons, opportunitySearch, hackathonCategoryFilter, hackathonDepartmentFilter, hackathonYearFilter, opportunitySort]
+  [hackathons, opportunitySearch, hackathonCategoryFilter, hackathonYearFilter, opportunitySort]
 );
 
 const filteredAllCompetitionHackathons = useMemo(
   () => filterCompetitionList(allCompetitions),
-  [allCompetitions, opportunitySearch, hackathonCategoryFilter, hackathonDepartmentFilter, hackathonYearFilter, opportunitySort]
+  [allCompetitions, opportunitySearch, hackathonCategoryFilter, hackathonYearFilter, opportunitySort]
 );
 
 const displayedCompetitionList = showAllCompetitions ? filteredAllCompetitionHackathons : filteredOpportunityHackathons;
@@ -6751,28 +7519,6 @@ const filteredSearchHackathons = hackathons.filter((hackathon) => {
   );
 });
 
-const filteredEvents = events.filter((event) => {
-  const query = searchText.toLowerCase().trim();
-
-  if (!query) return false;
-
-  return (
-    (event.title || event.name || "").toLowerCase().includes(query) ||
-    (event.date || "").toLowerCase().includes(query) ||
-    (event.time || "").toLowerCase().includes(query)
-  );
-});
-
-const upcomingEventsList = events.filter((event) => {
-  if (!event.startAt) return true;
-
-  const startDate =
-    typeof event.startAt?.toDate === "function"
-      ? event.startAt.toDate()
-      : new Date(event.startAt);
-
-  return !Number.isNaN(startDate.getTime()) && startDate >= new Date();
-});
 if (authLoading) {
   return null;
 }
@@ -6813,6 +7559,11 @@ if (!authUser) {
   <span>Learn</span>
 </div>
 
+<div className="auth-orbs" aria-hidden="true" />
+
+<div className="auth-particles" aria-hidden="true" />
+
+{/* CENTER CONTENT */}
 
 {/* CENTER CONTENT */}
 
@@ -7248,7 +7999,7 @@ const formData = new FormData(form);
       <h2>Create Account</h2>
 
       <p className="hackathon-modal-description">
-        Create your CampusConnect account and start connecting with students.
+        Create your CampusConnect account and start connecting with students. Your name, department, and year are derived from your verified CIT email.
       </p>
 
       <form
@@ -7258,17 +8009,13 @@ e.preventDefault();
 const form = e.currentTarget;
 
 const formData = new FormData(form);
-const name = formData.get("name");
 const email = formData.get("email");
 const password = formData.get("password");
 
-
-
-if (!name || !email || !password) {
+if (!email || !password) {
   setSignUpError("Please fill in all fields.");
   return;
 }
-const profileName = name.toString().trim();
 const profileEmail = email.toString().trim().toLowerCase();
 
 if (!isCollegeEmail(profileEmail)) {
@@ -7276,10 +8023,15 @@ if (!isCollegeEmail(profileEmail)) {
   return;
 }
 
-localStorage.setItem(
-  `campusconnect_name_${profileEmail}`,
-  profileName
-);
+const emailIdentity = getCITEmailIdentity(profileEmail);
+if (!emailIdentity) {
+  setSignUpError("Please use the CIT email format name.departmentYYYY@citchennai.net.");
+  return;
+}
+
+const profileName = formatLockedName(emailIdentity.nameSequence);
+const profileDepartment = normalizeDepartment(emailIdentity.department);
+const profileYear = getAcademicYearLabelFromBatch(emailIdentity.batchYear);
 
 if (signUpSubmittingRef.current) return;
 signUpSubmittingRef.current = true;
@@ -7316,11 +8068,14 @@ try {
       {
         name: profileName,
         email: profileEmail,
-        college: "",
-        department: "",
-        year: "",
+        college: CAMPUSCONNECT_COLLEGE,
+        department: profileDepartment,
+        year: profileYear,
         bio: "",
         skills: "",
+        lockedNameSequence: emailIdentity.nameSequence,
+        identityProfileVersion: IDENTITY_PROFILE_VERSION,
+        identitySetupCompleted: false,
         emailVerified: false,
       }
     ),
@@ -7417,16 +8172,9 @@ try {
         }}
       >
         <input
-          type="text"
-          name="name"
-          placeholder="Full name"
-          required
-        />
-
-        <input
           type="email"
           name="email"
-          placeholder="CIT email (name@citchennai.net)"
+          placeholder="CIT email (name.departmentYYYY@citchennai.net)"
           required
         />
 
@@ -7467,21 +8215,13 @@ try {
     <span></span>
   </div>
 
-  <div className="auth-scroll">
-    <div className="auth-scroll-icon">
-      ↓
-    </div>
-
-    <span>Scroll to explore</span>
-  </div>
-
 </div>
     </div>
     </div></div>
   );
 }
 
-const profileViewData = viewedProfile || profileData;
+const profileViewData = viewedProfile || { ...profileData, email: authUser?.email || "" };
 const profileViewActivity = viewedProfile?.activityData || activityData;
 const viewingOwnProfile = !viewedProfile || viewedProfile.id === authUser?.uid;
 
@@ -7533,7 +8273,7 @@ return (
   </button>
 
 
-  {/* HACKATHONS & EVENTS */}
+  {/* HACKATHONS */}
   <button
     className={
       activeNav === "hackathons"
@@ -7543,7 +8283,7 @@ return (
     onClick={() => handleNavigation("hackathons")}
   >
     <Trophy size={18} />
-    <span>Hackathons &amp; Events</span>
+    <span>Hackathons</span>
   </button>
 
 
@@ -7628,6 +8368,17 @@ return (
   </button>
 
 </nav>
+
+        <button
+          type="button"
+          className="nav-item feedback-support-nav-item"
+          onClick={() => setFeedbackSupportOpen(true)}
+          aria-label="Feedback & Support"
+          title="Feedback & Support"
+        >
+          <CircleHelp size={18} />
+          <span>Feedback &amp; Support</span>
+        </button>
 
         <div className="sidebar-spacer" />
 
@@ -7740,7 +8491,11 @@ return (
   <button
     type="button"
     className="profile-edit-button"
-    onClick={() => setEditProfileOpen(true)}
+    onClick={() => {
+      setProfileNameDraft(profileData.name || "");
+      setProfileNameError("");
+      setEditProfileOpen(true);
+    }}
   >
     Edit Profile
   </button>
@@ -7764,6 +8519,11 @@ return (
           <div className="profile-info-item">
             <span>COLLEGE</span>
             <strong>{profileViewData.college}</strong>
+          </div>
+
+          <div className="profile-info-item profile-email-item">
+            <span>COLLEGE EMAIL</span>
+            <strong>{profileViewData.email || "Email unavailable"}</strong>
           </div>
 
           <div className="profile-info-item">
@@ -7825,15 +8585,6 @@ return (
 
 <strong>{profileViewActivity.resourcesShared}</strong>
           <span>Resources Shared</span>
-        </div>
-
-        <div className="profile-stat">
-          <div className="profile-stat-icon">
-            <CalendarDays size={18} />
-          </div>
-
-         <strong>{profileViewActivity.eventsAttended}</strong>
-          <span>Events Attended</span>
         </div>
 
       </div>
@@ -7959,8 +8710,9 @@ return (
 
 {viewingOwnProfile && (
   <>
-    {profileNetworkOpen && (
-      <div
+    {profileNetworkOpen &&
+      createPortal(
+        <div
         className="profile-network-overlay"
         onClick={(e) => {
           if (e.target === e.currentTarget) {
@@ -8219,8 +8971,9 @@ return (
             )}
           </div>
         </div>
-      </div>
-    )}
+        </div>,
+        document.body
+      )}
   </>
 )}
   </div>
@@ -8322,17 +9075,31 @@ return (
                       )
                     : null;
 
+                const isMarketplaceEnquiry =
+                  notification.type === "marketplace_enquiry";
+                const isWantedEnquiry =
+                  notification.type === "wanted_enquiry";
+
                 return (
                   <div
                     className={`notification-item ${
                       notification.read ? "read" : ""
                     } ${
-                      pendingConnectionRequest || pendingTeamInvitation
+                      pendingConnectionRequest || pendingTeamInvitation || isMarketplaceEnquiry || isWantedEnquiry
                         ? "notification-item-actionable"
                         : ""
                     }`}
                     key={notification.id}
-                    onClick={() => markNotificationRead(notification)}
+                    onClick={async () => {
+                      await markNotificationRead(notification);
+                      if (isMarketplaceEnquiry) {
+                        setMarketplaceEnquiry(notification);
+                        setNotificationOpen(false);
+                      } else if (isWantedEnquiry) {
+                        setMarketplaceEnquiry(notification);
+                        setNotificationOpen(false);
+                      }
+                    }}
                   >
                     <div className="notification-dot" />
 
@@ -8635,7 +9402,7 @@ return (
               placeholder={
                 searchCategory === "students"
                   ? "Search by name, CampusConnect ID or skill..."
-                  : "Search students, hackathons, events..."
+                  : "Search students and hackathons..."
               }
               style={{ flex: 1 }}
             />
@@ -8654,27 +9421,25 @@ return (
               </div>
 
               <div className="teammate-filters">
-                <select
+                <StyledSelect
                   value={teammateDepartmentFilter}
-                  onChange={(e) => setTeammateDepartmentFilter(e.target.value)}
-                  style={{ minWidth: 0 }}
-                >
-                  <option value="">All Departments</option>
-                  {teammateDepartments.map((department) => (
-                    <option key={department} value={department}>{department}</option>
-                  ))}
-                </select>
+                  options={["All Departments", ...teammateDepartments]}
+                  onChange={(value) =>
+                    setTeammateDepartmentFilter(value === "All Departments" ? "" : value)
+                  }
+                  ariaLabel="Filter teammates by department"
+                  placeholder="All Departments"
+                />
 
-                <select
+                <StyledSelect
                   value={teammateYearFilter}
-                  onChange={(e) => setTeammateYearFilter(e.target.value)}
-                  style={{ minWidth: 0 }}
-                >
-                  <option value="">All Years</option>
-                  {teammateYears.map((year) => (
-                    <option key={year} value={year}>{year}</option>
-                  ))}
-                </select>
+                  options={["All Years", ...teammateYears]}
+                  onChange={(value) =>
+                    setTeammateYearFilter(value === "All Years" ? "" : value)
+                  }
+                  ariaLabel="Filter teammates by year"
+                  placeholder="All Years"
+                />
 
                 <input
                   type="text"
@@ -8793,37 +9558,9 @@ return (
                 <div className="search-empty">No hackathons found</div>
               )}
 
-              {(searchCategory === "events" || searchCategory === "all") &&
-                filteredEvents.map((event) => {
-                  const Icon = getDataIcon(event.icon, CalendarDays);
-                  return (
-                    <button
-                      type="button"
-                      key={`event-${event.id || event.title || event.name}`}
-                      className="search-result"
-                      onClick={() => {
-                        setSearchOpen(false);
-                        setSelectedEvent(event);
-                      }}
-                    >
-                      <div className="search-result-icon"><Icon size={18} /></div>
-                      <div className="search-result-info">
-                        <strong>{event.title || event.name}</strong>
-                        <span>{event.date || "Date TBA"}</span>
-                      </div>
-                      <CalendarDays size={16} />
-                    </button>
-                  );
-                })}
-
-              {searchCategory === "events" && filteredEvents.length === 0 && (
-                <div className="search-empty">No events found</div>
-              )}
-
-              {searchCategory === "all" &&
+                            {searchCategory === "all" &&
                 filteredTeammates.length === 0 &&
-                filteredSearchHackathons.length === 0 &&
-                filteredEvents.length === 0 && (
+                filteredSearchHackathons.length === 0 && (
                   <div className="search-empty">No results found</div>
                 )}
             </div>
@@ -8890,7 +9627,7 @@ return (
                   onClick={() => handleNavigation("hackathons")}
                 >
                   <Trophy size={17} />
-                  Hackathons &amp; Events
+                  Hackathons
                 </button>
 
               </div>
@@ -8976,13 +9713,13 @@ return (
             <div className="stat-card green">
 
               <div className="stat-icon">
-                <CalendarDays size={19} />
+                <BookOpen size={19} />
               </div>
 
               <div>
-                <strong>{dataLoading ? "..." : dashboardStats.upcomingEvents}</strong>
-                <span>Upcoming Events</span>
-                <small>Learn, connect, grow</small>
+                <strong>{dataLoading ? "..." : dashboardStats.resourcesShared}</strong>
+                <span>Resources Shared</span>
+                <small>Useful material from students</small>
               </div>
 
             </div>
@@ -9082,21 +9819,22 @@ return (
 
             {/* LIVE HACKATHON FILTERS */}
             {(hackathonFilterOptions.categories.length > 0 ||
-              hackathonFilterOptions.departments.length > 0 ||
               hackathonFilterOptions.years.length > 0) && (
               <div className="opportunity-filters">
-                <select value={hackathonCategoryFilter} onChange={(event) => setHackathonCategoryFilter(event.target.value)}>
-                  <option value="">All categories</option>
-                  {hackathonFilterOptions.categories.map((value) => <option key={value} value={value}>{value}</option>)}
-                </select>
-                <select value={hackathonDepartmentFilter} onChange={(event) => setHackathonDepartmentFilter(event.target.value)}>
-                  <option value="">All departments</option>
-                  {hackathonFilterOptions.departments.map((value) => <option key={value} value={value}>{value}</option>)}
-                </select>
-                <select value={hackathonYearFilter} onChange={(event) => setHackathonYearFilter(event.target.value)}>
-                  <option value="">All years</option>
-                  {hackathonFilterOptions.years.map((value) => <option key={value} value={value}>{value}</option>)}
-                </select>
+                <StyledSelect
+                  value={hackathonCategoryFilter}
+                  options={hackathonFilterOptions.categories}
+                  onChange={setHackathonCategoryFilter}
+                  ariaLabel="Filter competitions by category"
+                  placeholder="All categories"
+                />
+                <StyledSelect
+                  value={hackathonYearFilter}
+                  options={hackathonFilterOptions.years}
+                  onChange={setHackathonYearFilter}
+                  ariaLabel="Filter competitions by year"
+                  placeholder="All years"
+                />
               </div>
             )}
 
@@ -9372,150 +10110,6 @@ return (
           </section>
 
 
-          {/* EVENTS */}
-
-          <section
-            className="lower-section events-subsection"
-            id="events"
-          >
-
-            <div className="section-heading">
-
-              <span className="eyebrow">
-                CAMPUS LIFE
-              </span>
-
-              <h2>
-                Upcoming Events
-              </h2>
-
-            </div>
-
-
-            <div className="simple-events">
-
-              {upcomingEventsList.length === 0 && !dataLoading && (
-                <div className="search-empty">
-                  {dataError || "No upcoming events available yet."}
-                </div>
-              )}
-
-              {upcomingEventsList.map((event) => {
-                const Icon = getDataIcon(event.icon, CalendarDays);
-
-                return (
-                  <div
-                    className="simple-event"
-                    key={event.id}
-                    onClick={() => setSelectedEvent(event)}
-                  >
-                    <Icon size={21} />
-                    <div>
-                      <strong>{event.title || event.name || "Campus Event"}</strong>
-                      <span>
-                        {event.date || "Date TBA"}
-                        {event.time ? ` • ${event.time}` : ""}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      className={`event-favorite-button ${eventInterestIds.has(event.id) ? "is-saved" : ""}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleEventInterest(event);
-                      }}
-                      disabled={eventInterestLoading}
-                      aria-label={
-                        eventInterestIds.has(event.id)
-                          ? `Remove ${event.title || event.name || "event"} from saved events`
-                          : `Save ${event.title || event.name || "event"}`
-                      }
-                      title={eventInterestIds.has(event.id) ? "Remove from saved" : "Save event"}
-                    >
-                      <Star size={16} fill={eventInterestIds.has(event.id) ? "currentColor" : "none"} />
-                    </button>
-                    <Clock3 size={17} />
-                  </div>
-                );
-              })}
-
-            </div>
-
-            {/* SAVED EVENT INTERESTS */}
-            <div
-              style={{
-                margin: "22px 0 0",
-                padding: "14px 16px",
-                border: "1px solid rgba(139, 92, 246, 0.22)",
-                borderRadius: "14px",
-                background: "rgba(139, 92, 246, 0.055)",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "12px",
-                  marginBottom: eventInterestIds.size ? "12px" : "0",
-                }}
-              >
-                <div>
-                  <strong style={{ display: "block", fontSize: "14px" }}>
-                    ⭐ Your Saved Events
-                  </strong>
-                  <span style={{ fontSize: "11px", opacity: 0.68 }}>
-                    Events you've saved with the star
-                  </span>
-                </div>
-                <span style={{ fontSize: "12px", fontWeight: 700, opacity: 0.8 }}>
-                  {eventInterestIds.size} saved
-                </span>
-              </div>
-
-              {eventInterestIds.size === 0 ? (
-                <div style={{ fontSize: "12px", opacity: 0.62 }}>
-                  No saved events yet. Tap the ☆ star on an event to save it.
-                </div>
-              ) : (
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: "9px",
-                  }}
-                >
-                  {events
-                    .filter((event) => eventInterestIds.has(event.id))
-                    .map((event) => (
-                      <button
-                        key={`saved-event-${event.id}`}
-                        type="button"
-                        onClick={() => setSelectedEvent(event)}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "7px",
-                          padding: "8px 11px",
-                          borderRadius: "9px",
-                          border: "1px solid rgba(139, 92, 246, 0.28)",
-                          background: "rgba(255, 255, 255, 0.035)",
-                          color: "inherit",
-                          cursor: "pointer",
-                          fontSize: "11px",
-                          fontWeight: 600,
-                        }}
-                      >
-                        <CalendarDays size={13} />
-                        {event.title || event.name || "Campus Event"}
-                      </button>
-                    ))}
-                </div>
-              )}
-            </div>
-
-          </section>
-
           {/* CREATE TEAM */}
 
           <section className="create-team-card teams-create-section" id="teams">
@@ -9776,11 +10370,40 @@ return (
                       const isOwner = team.createdBy === authUser.uid;
 
                       return (
-                        <div className="team-modern-card" key={team.id}>
+                        <div
+                          className={`team-modern-card ${!isOwner ? "team-member-clickable" : ""}`}
+                          key={team.id}
+                          role={!isOwner ? "button" : undefined}
+                          tabIndex={!isOwner ? 0 : undefined}
+                          onClick={(event) => {
+                            if (isOwner || event.target.closest("button")) return;
+                            openTeamStatus(team);
+                          }}
+                          onKeyDown={(event) => {
+                            if (isOwner || event.target.closest("button")) return;
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              openTeamStatus(team);
+                            }
+                          }}
+                        >
                           <div className="team-card-icon"><Rocket size={18} /></div>
                           <div className="team-card-main">
                             <div className="team-card-title-row">
-                              <h4>{team.title || "Hackathon Team"}</h4>
+                              {isOwner ? (
+                                <h4>{team.title || "Hackathon Team"}</h4>
+                              ) : (
+                                <h4
+                                  className="team-title-view-text"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    openTeamStatus(team);
+                                  }}
+                                >
+                                  <span>{team.title || "Hackathon Team"}</span>
+                                  <span className="team-title-view-arrow" aria-hidden="true">→</span>
+                                </h4>
+                              )}
                               <span className={team.status === "Full" ? "team-status full" : "team-status open"}>
                                 {team.status === "Full" ? "Full" : "Open"}
                               </span>
@@ -9792,7 +10415,11 @@ return (
                             </div>
                             <div className="team-card-skills">Skills: {team.skills || "Not specified"}</div>
                           </div>
-                          <div className="team-card-actions">
+                          <div
+                            className="team-card-actions"
+                            onClick={(event) => event.stopPropagation()}
+                            onKeyDown={(event) => event.stopPropagation()}
+                          >
                             {isOwner ? (
                               <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                                 <button type="button" className="primary-button" onClick={() => openTeamStatus(team)}>
@@ -9904,56 +10531,107 @@ return (
                 <div className="messages-conversation-list">
                   {directConversationsLoading ? (
                     <div className="messages-empty-state">Loading conversations...</div>
-                  ) : directConversations.length === 0 ? (
-                    <div className="messages-empty-state">
-                      <MessageCircle size={22} />
-                      <strong>No conversations yet</strong>
-                      <span>Use Find Teammates and choose Message on a student profile.</span>
-                    </div>
                   ) : (
-                    directConversations.map((conversation) => {
-                      const other = getDirectOtherParticipant(conversation);
-                      const active = directConversation?.id === conversation.id;
+                    <>
+                      {connectedStudentsForMessages.length > 0 && (
+                        <div className="messages-start-section">
+                          <div className="messages-start-header">
+                            <div>
+                              <strong>Start a conversation</strong>
+                              <span>{connectedStudentsForMessages.length} connected</span>
+                            </div>
+                          </div>
 
-                      return (
-                        <button
-                          type="button"
-                          key={conversation.id}
-                          className={`direct-conversation-item ${active ? "active" : ""}`}
-                          onClick={async () => {
-                            setDirectConversation(conversation);
-                            if (authUser?.uid) {
-                              try {
-                                await updateDoc(
-                                  doc(db, "directConversations", conversation.id),
-                                  {
-                                    [`unreadCounts.${authUser.uid}`]: 0,
-                                    [`lastReadAt.${authUser.uid}`]: serverTimestamp(),
+                          <div className="messages-start-list">
+                            {connectedStudentsForMessages.map((person) => (
+                              <div className="messages-start-item" key={person.id}>
+                                <div className="direct-conversation-avatar">
+                                  {(person.name || "C").charAt(0).toUpperCase()}
+                                </div>
+                                <div className="direct-conversation-copy">
+                                  <strong>{person.name || "Connected Student"}</strong>
+                                  <span>{person.campusConnectId || "CampusConnect student"}</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="messages-start-button"
+                                  onClick={() => openDirectConversation(person)}
+                                  aria-label={`Message ${person.name || "connected student"}`}
+                                  title={`Message ${person.name || "connected student"}`}
+                                >
+                                  <MessageCircle size={16} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="messages-existing-header">
+                        <strong>Conversations</strong>
+                        <span>{directConversations.length} active</span>
+                      </div>
+
+                      {directConversations.length === 0 ? (
+                        <div className="messages-empty-state messages-empty-state-compact">
+                          <MessageCircle size={22} />
+                          <strong>
+                            {connectedStudentsForMessages.length > 0
+                              ? "No active conversations yet"
+                              : "No conversations yet"}
+                          </strong>
+                          <span>
+                            {connectedStudentsForMessages.length > 0
+                              ? "Tap the message icon above to start one."
+                              : "Connect with a student to start messaging them."}
+                          </span>
+                        </div>
+                      ) : (
+                        directConversations.map((conversation) => {
+                          const other = getDirectOtherParticipant(conversation);
+                          const active = directConversation?.id === conversation.id;
+
+                          return (
+                            <button
+                              type="button"
+                              key={conversation.id}
+                              className={`direct-conversation-item ${active ? "active" : ""}`}
+                              onClick={async () => {
+                                setDirectConversation(conversation);
+                                if (authUser?.uid) {
+                                  try {
+                                    await updateDoc(
+                                      doc(db, "directConversations", conversation.id),
+                                      {
+                                        [`unreadCounts.${authUser.uid}`]: 0,
+                                        [`lastReadAt.${authUser.uid}`]: serverTimestamp(),
+                                      }
+                                    );
+                                  } catch (error) {
+                                    console.error("DIRECT MESSAGE READ UPDATE ERROR:", error);
                                   }
-                                );
-                              } catch (error) {
-                                console.error("DIRECT MESSAGE READ UPDATE ERROR:", error);
-                              }
-                            }
-                          }}
-                        >
-                          <div className="direct-conversation-avatar">
-                            {(other?.name || "C").charAt(0).toUpperCase()}
-                          </div>
-                          <div className="direct-conversation-copy">
-                            <strong>{other?.name || "CIT Student"}</strong>
-                            <span>{conversation.lastMessage || "Start a conversation"}</span>
-                          </div>
-                          {Number(conversation.unreadCounts?.[authUser?.uid] || 0) > 0 && (
-                            <span className="direct-unread-badge">
-                              {conversation.unreadCounts[authUser.uid] > 99
-                                ? "99+"
-                                : conversation.unreadCounts[authUser.uid]}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })
+                                }
+                              }}
+                            >
+                              <div className="direct-conversation-avatar">
+                                {(other?.name || "C").charAt(0).toUpperCase()}
+                              </div>
+                              <div className="direct-conversation-copy">
+                                <strong>{other?.name || "CIT Student"}</strong>
+                                <span>{conversation.lastMessage || "Start a conversation"}</span>
+                              </div>
+                              {Number(conversation.unreadCounts?.[authUser?.uid] || 0) > 0 && (
+                                <span className="direct-unread-badge">
+                                  {conversation.unreadCounts[authUser.uid] > 99
+                                    ? "99+"
+                                    : conversation.unreadCounts[authUser.uid]}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })
+                      )}
+                    </>
                   )}
                 </div>
               </aside>
@@ -9977,9 +10655,108 @@ return (
                           <span>CampusConnect student</span>
                         </div>
                       </div>
-                      <button type="button" className="messages-close-conversation" onClick={closeDirectConversation} aria-label="Close conversation">
-                        <X size={16} />
-                      </button>
+                      <div className="direct-chat-header-actions">
+                        <div className="direct-conversation-action-wrap">
+                          <button
+                            type="button"
+                            className="direct-conversation-action-button"
+                            onClick={(event) => {
+                              if (directConversationMenu) {
+                                setDirectConversationMenu(false);
+                                setDirectConversationMenuPosition(null);
+                                return;
+                              }
+
+                              const rect = event.currentTarget.getBoundingClientRect();
+                              const viewportWidth =
+                                window.visualViewport?.width || window.innerWidth;
+                              const viewportHeight =
+                                window.visualViewport?.height || window.innerHeight;
+                              const viewportPadding = 12;
+                              const gap = 8;
+                              const menuWidth = Math.min(
+                                190,
+                                Math.max(150, viewportWidth - viewportPadding * 2)
+                              );
+                              const menuHeight = 90;
+
+                              // Prefer opening to the right of the options button.
+                              // Only move left when the right side would leave the viewport.
+                              let left = rect.right + gap;
+
+                              if (left + menuWidth > viewportWidth - viewportPadding) {
+                                left = rect.left - menuWidth - gap;
+                              }
+
+                              left = Math.max(
+                                viewportPadding,
+                                Math.min(
+                                  left,
+                                  viewportWidth - menuWidth - viewportPadding
+                                )
+                              );
+
+                              const preferredTop = rect.bottom + gap;
+                              let top = preferredTop;
+
+                              if (top + menuHeight > viewportHeight - viewportPadding) {
+                                top = rect.top - menuHeight - gap;
+                              }
+
+                              top = Math.max(
+                                viewportPadding,
+                                Math.min(
+                                  top,
+                                  viewportHeight - menuHeight - viewportPadding
+                                )
+                              );
+
+                              setDirectConversationMenuPosition({
+                                top,
+                                left,
+                              });
+                              setDirectConversationMenu(true);
+                            }}
+                            aria-label="Conversation options"
+                            aria-expanded={directConversationMenu}
+                          >
+                            <MoreVertical size={17} />
+                          </button>
+
+                          {directConversationMenu &&
+                            directConversationMenuPosition &&
+                            createPortal(
+                              <div
+                                className="direct-conversation-action-menu direct-conversation-action-menu-portal"
+                                style={{
+                                  top: `${directConversationMenuPosition.top}px`,
+                                  left: `${directConversationMenuPosition.left}px`,
+                                }}
+                              >
+                                {blockedUserIds.includes(getDirectOtherParticipant(directConversation)?.id) ? (
+                                  <button type="button" onClick={() => requestDirectConversationAction("unblock")}>
+                                    <UserCheck size={14} />
+                                    Unblock Student
+                                  </button>
+                                ) : (
+                                  <button type="button" className="danger" onClick={() => requestDirectConversationAction("block")}>
+                                    <UserX size={14} />
+                                    Block Student
+                                  </button>
+                                )}
+                                <button type="button" className="danger" onClick={() => requestDirectConversationAction("delete")}>
+                                  <Trash2 size={14} />
+                                  Delete Chat for Me
+                                </button>
+                              </div>,
+                              document.body
+                            )}
+                        </div>
+
+                        <button type="button" className="messages-close-conversation" onClick={closeDirectConversation} aria-label="Close conversation">
+                          <X size={16} />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="direct-chat-messages">
@@ -9997,7 +10774,27 @@ return (
                             <div className={`direct-message-row ${own ? "own" : ""}`} key={message.id}>
                               <div className="direct-message-content-wrap">
                                 <div className="direct-message-bubble">
-                                  {message.message}
+                                  {message.message && <div className="direct-message-text">{message.message}</div>}
+
+                                  {Array.isArray(message.media) && message.media.length > 0 && (
+                                    <div className={`direct-message-media-grid count-${Math.min(message.media.length, 3)}`}>
+                                      {message.media.slice(0, 3).map((media, index) => (
+                                        <a
+                                          key={`${media.fileId || media.url}-${index}`}
+                                          href={media.url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="direct-message-media-link"
+                                        >
+                                          <img
+                                            src={media.thumbnailUrl || media.url}
+                                            alt={media.fileName || `Message image ${index + 1}`}
+                                            className="direct-message-media-image"
+                                          />
+                                        </a>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
 
                                 {!own && (
@@ -10005,32 +10802,90 @@ return (
                                     <button
                                       type="button"
                                       className="direct-message-menu-button"
-                                      onClick={() =>
-                                        setDirectMessageMenu((current) =>
-                                          current === message.id ? null : message.id
-                                        )
-                                      }
+                                      onClick={(event) => {
+                                        if (directMessageMenu?.id === message.id) {
+                                          setDirectMessageMenu(null);
+                                          return;
+                                        }
+
+                                        const rect = event.currentTarget.getBoundingClientRect();
+                                        const viewportWidth =
+                                          window.visualViewport?.width || window.innerWidth;
+                                        const viewportHeight =
+                                          window.visualViewport?.height || window.innerHeight;
+                                        const viewportPadding = 10;
+                                        const gap = 8;
+                                        const menuWidth = Math.min(
+                                          148,
+                                          Math.max(130, viewportWidth - viewportPadding * 2)
+                                        );
+                                        const menuHeight = 44;
+
+                                        // Prefer the right-hand side so Report Message
+                                        // does not cover the message bubble on phones.
+                                        let left = rect.right + gap;
+
+                                        if (left + menuWidth > viewportWidth - viewportPadding) {
+                                          left = rect.left - menuWidth - gap;
+                                        }
+
+                                        left = Math.max(
+                                          viewportPadding,
+                                          Math.min(
+                                            left,
+                                            viewportWidth - menuWidth - viewportPadding
+                                          )
+                                        );
+
+                                        let top = rect.top - menuHeight - gap;
+
+                                        if (top < viewportPadding) {
+                                          top = rect.bottom + gap;
+                                        }
+
+                                        top = Math.max(
+                                          viewportPadding,
+                                          Math.min(
+                                            top,
+                                            viewportHeight - menuHeight - viewportPadding
+                                          )
+                                        );
+
+                                        setDirectMessageMenu({
+                                          id: message.id,
+                                          top,
+                                          left,
+                                        });
+                                      }}
                                       aria-label="Message options"
                                     >
                                       <MoreVertical size={14} />
                                     </button>
 
-                                    {directMessageMenu === message.id && (
-                                      <div className="direct-message-menu">
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setDirectMessageReportReason("");
-                                            setDirectMessageReportDescription("");
-                                            setDirectMessageReportTarget(message);
-                                            setDirectMessageMenu(null);
+                                    {directMessageMenu?.id === message.id &&
+                                      createPortal(
+                                        <div
+                                          className="direct-message-menu direct-message-menu-portal"
+                                          style={{
+                                            top: `${directMessageMenu.top}px`,
+                                            left: `${directMessageMenu.left}px`,
                                           }}
                                         >
-                                          <Flag size={13} />
-                                          Report message
-                                        </button>
-                                      </div>
-                                    )}
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setDirectMessageReportReason("");
+                                              setDirectMessageReportDescription("");
+                                              setDirectMessageReportTarget(message);
+                                              setDirectMessageMenu(null);
+                                            }}
+                                          >
+                                            <Flag size={13} />
+                                            Report message
+                                          </button>
+                                        </div>,
+                                        document.body
+                                      )}
                                   </div>
                                 )}
                               </div>
@@ -10048,18 +10903,65 @@ return (
                         sendDirectMessage();
                       }}
                     >
-                      <input
-                        type="text"
-                        value={directMessageInput}
-                        onChange={(event) => setDirectMessageInput(event.target.value)}
-                        placeholder="Write a message..."
-                        maxLength={2000}
-                        disabled={directMessageSending}
-                      />
-                      <button type="submit" className="primary-button" disabled={directMessageSending || !directMessageInput.trim()}>
-                        <Send size={15} />
-                        {directMessageSending ? "Sending..." : "Send"}
-                      </button>
+                      {directMessageMediaFiles.length > 0 && (
+                        <div className="direct-message-selected-media">
+                          {directMessageMediaFiles.map((file) => (
+                            <span key={`${file.name}-${file.size}-${file.lastModified}`}>
+                              <FileImage size={12} />
+                              {file.name}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDirectMessageMediaFiles((prev) =>
+                                    prev.filter(
+                                      (item) =>
+                                        `${item.name}-${item.size}-${item.lastModified}` !==
+                                        `${file.name}-${file.size}-${file.lastModified}`
+                                    )
+                                  )
+                                }
+                                aria-label={`Remove ${file.name}`}
+                              >
+                                <X size={11} />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="direct-chat-composer-row">
+                        <input
+                          type="text"
+                          value={directMessageInput}
+                          onChange={(event) => setDirectMessageInput(event.target.value)}
+                          placeholder="Write a message..."
+                          maxLength={2000}
+                          disabled={directMessageSending}
+                        />
+
+                        <label className="direct-message-media-button" title="Add up to 3 images">
+                          <FileImage size={15} />
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            onChange={(event) => {
+                              handleDirectMessageMediaFiles(event.target.files);
+                              event.target.value = "";
+                            }}
+                            disabled={directMessageSending}
+                          />
+                        </label>
+
+                        <button
+                          type="submit"
+                          className="primary-button"
+                          disabled={directMessageSending || (!directMessageInput.trim() && directMessageMediaFiles.length === 0)}
+                        >
+                          <Send size={15} />
+                          {directMessageSending ? "Sending..." : "Send"}
+                        </button>
+                      </div>
                     </form>
                   </>
                 )}
@@ -10082,7 +10984,7 @@ return (
 </h2>
 
 <p>
-  Buy, exchange, or bid on useful resources shared by students across campus.
+  Buy, exchange, or find useful items shared by students across campus.
 </p>
   </div>
 
@@ -10152,31 +11054,32 @@ return (
   </div>
 
 
-  {/* BIDDING */}
-<div
-  className="resource-card"
-  onClick={() => setBiddingOpen(true)}
->
-    <div className="resource-icon orange">
-      <Gavel size={22} />
+  {/* WANTED / LOOKING FOR */}
+  <div
+    className="resource-card"
+    onClick={() => setWantedOpen(true)}
+  >
+    <div className="resource-icon blue">
+      <Search size={22} />
     </div>
 
     <div className="resource-content">
-      <h3>Bidding</h3>
+      <h3>Wanted / Looking For</h3>
 
       <p>
-        Discover student listings and place bids on
-        items through a simple auction system.
+        Post something you need and let students who have it
+        reach out to you.
       </p>
-<button
-  type="button"
-  onClick={(e) => {
-    e.stopPropagation();
-    setBiddingOpen(true);
-  }}
->
-  View Auctions
-</button>
+
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setWantedOpen(true);
+        }}
+      >
+        Browse Wanted Posts
+      </button>
     </div>
   </div>
 
@@ -10238,10 +11141,10 @@ return (
         SHARED BY CAMPUS COMMUNITY
       </span>
 
-      <h3>Your Shared Resources</h3>
+      <h3>Shared Resources</h3>
 
       <p>
-        Resources you've shared with the CampusConnect community.
+        Explore useful resources shared by the CampusConnect community.
       </p>
     </div>
 
@@ -10277,12 +11180,34 @@ return (
       {filteredCommunityResources.map((resource, index) => (
 <div
   className="shared-resource-card"
-  key={`${resource.title}-${index}`}
+  key={resource.id || `${resource.title}-${index}`}
 >
 
-  <div className="shared-resource-icon">
-    <BookOpen size={22} />
-  </div>
+  {resource.userId === authUser?.uid && (
+    <button
+      type="button"
+      className="shared-resource-delete shared-resource-delete-top"
+      onClick={() => handleDeleteResource(resource)}
+      aria-label={`Delete ${resource.title || "resource"}`}
+      title="Delete resource"
+    >
+      <Trash2 size={15} />
+    </button>
+  )}
+
+  {resource.coverImageThumbnailUrl || resource.coverImageUrl ? (
+    <div className="shared-resource-cover-wrap">
+      <img
+        src={resource.coverImageThumbnailUrl || resource.coverImageUrl}
+        alt={resource.title}
+        className="shared-resource-cover"
+      />
+    </div>
+  ) : (
+    <div className="shared-resource-icon">
+      <BookOpen size={22} />
+    </div>
+  )}
 
   <div className="shared-resource-content">
 
@@ -10294,9 +11219,47 @@ return (
       {resource.title}
     </h3>
 
-    <p>
-      {resource.description}
-    </p>
+    {(() => {
+      const description = resource.description || "";
+      const textKey = `resource:${resource.id || index}`;
+      const expanded = expandedExchangeTextKeys.has(textKey);
+      const needsExpansion = description.length > 180;
+      const visibleDescription =
+        needsExpansion && !expanded
+          ? `${description.slice(0, 180).trimEnd()}…`
+          : description;
+
+      return (
+        <>
+          <p>{visibleDescription}</p>
+          {needsExpansion && (
+            <button
+              type="button"
+              className="exchange-show-more shared-resource-show-more"
+              onClick={() => toggleExpandedExchangeText(textKey)}
+            >
+              {expanded ? "Show less" : "Show more"}
+              <ChevronDown size={12} className={expanded ? "expanded" : ""} />
+            </button>
+          )}
+        </>
+      );
+    })()}
+
+    <button
+      type="button"
+      className="shared-resource-author"
+      onClick={() =>
+        openTeamMemberProfile({
+          memberId: resource.userId,
+          memberName: resource.userName || resource.userEmail?.split("@")[0] || "CIT Student",
+        })
+      }
+    >
+      Shared by {resource.userName || resource.userEmail?.split("@")[0] || "CIT Student"}
+      <span>{resource.userEmail || "Email unavailable"}</span>
+      <strong>→</strong>
+    </button>
 
   </div>
 
@@ -10473,7 +11436,7 @@ return (
           <span className="community-resource-category">STUDENT MARKETPLACE</span>
           <h3>Buy & Sell</h3>
           <p className="marketplace-modal-subtitle">
-            Real student listings from Firestore. Meet on campus and choose Cash or Online payment.
+            Fixed-price student listings. Meet on campus and arrange payment directly with the seller.
           </p>
         </div>
 
@@ -10492,7 +11455,7 @@ return (
 
       <div className="marketplace-toolbar">
         <div>
-          <strong>{marketplaceListings.length}</strong>
+          <strong>{marketplaceListings.filter((listing) => listing.listingType === "fixed").length}</strong>
           <span>active listings</span>
         </div>
         <button
@@ -10514,7 +11477,7 @@ return (
 
       {marketplaceLoading ? (
         <div className="marketplace-empty-state">Loading live marketplace listings...</div>
-      ) : marketplaceListings.length === 0 ? (
+      ) : marketplaceListings.filter((listing) => listing.listingType === "fixed").length === 0 ? (
         <div className="marketplace-empty-state">
           <ShoppingBag size={26} />
           <strong>No listings yet</strong>
@@ -10523,9 +11486,20 @@ return (
       ) : (
         <div className="marketplace-listings-grid">
           {marketplaceListings
-            .filter((listing) => listing.listingType !== "auction")
+            .filter((listing) => listing.listingType === "fixed")
             .map((listing) => (
               <div className="marketplace-product-card" key={listing.id}>
+                {listing.sellerId === authUser?.uid && (
+                  <button
+                    type="button"
+                    className="marketplace-listing-delete"
+                    onClick={() => deleteMarketplaceListing(listing)}
+                    aria-label={`Delete ${listing.title || "listing"}`}
+                    title="Delete listing"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
                 <div className="marketplace-product-image-wrap">
                   {listing.imageThumbnails?.[0] || listing.imageUrls?.[0] ? (
                     <img
@@ -10550,49 +11524,30 @@ return (
                     <span>Seller</span>
                     <strong>{listing.sellerName || "CIT Student"}</strong>
                   </div>
+                  <div className="marketplace-seller-email">
+                    {listing.sellerEmail || "Email unavailable"}
+                  </div>
                   <div className="marketplace-meta-row">
                     <span>{listing.handoverLocation || "CIT Campus"}</span>
-                    <span>{(listing.paymentMethods || []).map((method) => method === "online" ? "Online" : "Cash").join(" · ")}</span>
+                    <span>Fixed price</span>
                   </div>
+                  {listing.sellerId !== authUser?.uid && (
+                    <button
+                      type="button"
+                      className="marketplace-enquire-button"
+                      onClick={() => sendMarketplaceEnquiry(listing)}
+                    >
+                      <MessageCircle size={14} />
+                      Enquire
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
         </div>
       )}
 
-      {marketplaceListings.some((listing) => listing.listingType === "auction") && (
-        <div className="marketplace-auction-preview">
-          <div className="marketplace-subsection-heading">
-            <div>
-              <span className="community-resource-category">AUCTIONS</span>
-              <h4>Live student auctions</h4>
-            </div>
-            <button type="button" onClick={() => setBiddingOpen(true)}>View All</button>
-          </div>
 
-          {marketplaceListings
-            .filter((listing) => listing.listingType === "auction")
-            .slice(0, 3)
-            .map((listing) => {
-              const end = listing.auctionEndAt?.toDate?.() || new Date(listing.auctionEndAt);
-              const ended = !end || Number.isNaN(end.getTime()) || end <= new Date();
-              return (
-                <div className="marketplace-auction-row" key={listing.id}>
-                  <div className="marketplace-auction-thumb">
-                    {listing.imageThumbnails?.[0] || listing.imageUrls?.[0] ? (
-                      <img src={listing.imageThumbnails?.[0] || listing.imageUrls?.[0]} alt="" />
-                    ) : <Gavel size={18} />}
-                  </div>
-                  <div className="marketplace-auction-info">
-                    <strong>{listing.title}</strong>
-                    <span>{ended ? "Auction ended" : `Current bid ₹${Number(listing.currentPrice || listing.startingPrice || 0).toLocaleString("en-IN")}`}</span>
-                  </div>
-                  <button type="button" onClick={() => setBiddingOpen(true)}>Bid</button>
-                </div>
-              );
-            })}
-        </div>
-      )}
     </div>
   </div>
 )}
@@ -10644,40 +11599,15 @@ return (
           </label>
         </div>
 
-        <div className="marketplace-listing-type">
-          <span>Listing type</span>
-          <div>
-            <button type="button" className={marketplaceForm.listingType === "fixed" ? "active" : ""} onClick={() => handleMarketplaceFormChange("listingType", "fixed")}>Fixed Price</button>
-            <button type="button" className={marketplaceForm.listingType === "auction" ? "active" : ""} onClick={() => handleMarketplaceFormChange("listingType", "auction")}>Ascending Auction</button>
-          </div>
-        </div>
+        <label>
+          Selling price (₹)
+          <input type="number" min="1" value={marketplaceForm.price} onChange={(e) => handleMarketplaceFormChange("price", e.target.value)} placeholder="450" />
+        </label>
 
-        {marketplaceForm.listingType === "fixed" ? (
-          <label>
-            Selling price (₹)
-            <input type="number" min="1" value={marketplaceForm.price} onChange={(e) => handleMarketplaceFormChange("price", e.target.value)} placeholder="450" />
-          </label>
-        ) : (
-          <div className="marketplace-form-grid">
-            <label>
-              Starting price (₹)
-              <input type="number" min="1" value={marketplaceForm.startingPrice} onChange={(e) => handleMarketplaceFormChange("startingPrice", e.target.value)} placeholder="500" />
-            </label>
-            <label>
-              Minimum bid increment (₹)
-              <input type="number" min="1" value={marketplaceForm.minimumBidIncrement} onChange={(e) => handleMarketplaceFormChange("minimumBidIncrement", e.target.value)} placeholder="50" />
-            </label>
-            <label>
-              Auction ends
-              <input type="datetime-local" value={marketplaceForm.auctionEndAt} onChange={(e) => handleMarketplaceFormChange("auctionEndAt", e.target.value)} />
-            </label>
-          </div>
-        )}
-
-        <div className="marketplace-payment-options">
-          <span>Accepted payment methods</span>
-          <label><input type="checkbox" checked={marketplaceForm.paymentMethods.includes("cash")} onChange={() => toggleMarketplacePaymentMethod("cash")} /> Cash</label>
-          <label><input type="checkbox" checked={marketplaceForm.paymentMethods.includes("online")} onChange={() => toggleMarketplacePaymentMethod("online")} /> Online</label>
+        <div className="marketplace-payment-options marketplace-direct-payment-note">
+          <span>Handover & payment</span>
+          <div><strong>Arrange payment directly with the seller</strong></div>
+          <small>CampusConnect does not collect, hold, or transfer payment. Discuss the details with the seller before meeting on campus.</small>
         </div>
 
         <label>
@@ -10762,13 +11692,44 @@ return (
             const image = listing.imageThumbnails?.[0] || listing.imageUrls?.[0];
             const isOwner = listing.ownerId === authUser?.uid;
 
+            const description = listing.description || "";
+            const textKey = `trade:${listing.id}`;
+            const expanded = expandedExchangeTextKeys.has(textKey);
+            const needsExpansion = description.length > 150;
+            const visibleDescription =
+              needsExpansion && !expanded
+                ? `${description.slice(0, 150).trimEnd()}…`
+                : description;
+
             return (
-              <button
+              <div
                 key={listing.id}
-                type="button"
                 className="trade-give-listing-card"
+                role="button"
+                tabIndex={0}
                 onClick={() => openTradeGiveListing(listing)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    openTradeGiveListing(listing);
+                  }
+                }}
               >
+                {isOwner && (
+                  <button
+                    type="button"
+                    className="exchange-listing-delete trade-give-listing-delete"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      deleteTradeGiveListing(listing);
+                    }}
+                    aria-label={`Delete ${listing.title || "listing"}`}
+                    title="Delete listing"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+
                 <div className="trade-give-listing-image-wrap">
                   {image ? (
                     <img src={image} alt={listing.title} className="trade-give-listing-image" />
@@ -10786,7 +11747,20 @@ return (
                     <span className="trade-give-listing-category">{listing.category || "ITEM"}</span>
                   </div>
                   <h4>{listing.title}</h4>
-                  <p>{listing.description}</p>
+                  <p>{visibleDescription}</p>
+                  {needsExpansion && (
+                    <button
+                      type="button"
+                      className="exchange-show-more trade-give-show-more"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleExpandedExchangeText(textKey);
+                      }}
+                    >
+                      {expanded ? "Show less" : "Show more"}
+                      <ChevronDown size={12} className={expanded ? "expanded" : ""} />
+                    </button>
+                  )}
                   {listing.mode === "trade" && listing.wantedItem && (
                     <span className="trade-give-wanted">Looking for: {listing.wantedItem}</span>
                   )}
@@ -10794,9 +11768,12 @@ return (
                     <span>{listing.condition || "Good"}</span>
                     <span>{isOwner ? "Your listing" : `${listing.ownerName || "CIT Student"}`}</span>
                   </div>
+                  <div className="trade-give-listing-email">
+                    {listing.ownerEmail || "Email unavailable"}
+                  </div>
                 </div>
                 <div className="trade-give-listing-arrow">›</div>
-              </button>
+              </div>
             );
           })}
         </div>
@@ -10836,6 +11813,7 @@ return (
               <div><span>Condition</span><strong>{tradeGiveSelectedListing.condition || "—"}</strong></div>
               <div><span>Handover</span><strong>{tradeGiveSelectedListing.handoverLocation || "CIT Campus"}</strong></div>
               <div><span>Posted by</span><strong>{tradeGiveSelectedListing.ownerName || "CIT Student"}</strong></div>
+              <div><span>Email</span><strong>{tradeGiveSelectedListing.ownerEmail || "Email unavailable"}</strong></div>
             </div>
 
             {tradeGiveSelectedListing.mode === "trade" && (
@@ -11025,112 +12003,448 @@ return (
 )}
   
   
-{biddingOpen && (
+{wantedOpen && (
   <div className="exchange-modal-overlay">
-    <div className="exchange-modal marketplace-auction-modal">
+    <div className="exchange-modal wanted-modal">
       <div className="exchange-modal-header marketplace-modal-header">
         <div>
-          <span className="community-resource-category">STUDENT AUCTIONS</span>
-          <h3>Live Bidding</h3>
-          <p className="marketplace-modal-subtitle">Normal ascending bids. No paid entry, bidding credits, or random winners.</p>
+          <span className="community-resource-category">STUDENT EXCHANGE</span>
+          <h3>Wanted / Looking For</h3>
+          <p className="marketplace-modal-subtitle">
+            Find something you need on campus or post a request for another student to see.
+          </p>
         </div>
-        <button type="button" className="exchange-modal-close" onClick={() => { setBiddingOpen(false); setMarketplaceSelectedAuction(null); }} aria-label="Close auctions">
+        <button
+          type="button"
+          className="exchange-modal-close"
+          onClick={() => {
+            setWantedOpen(false);
+            setWantedCreateOpen(false);
+          }}
+          aria-label="Close wanted posts"
+        >
           <X size={18} />
         </button>
       </div>
 
-      <div className="marketplace-auction-list">
-        {marketplaceListings.filter((listing) => listing.listingType === "auction").length === 0 ? (
-          <div className="marketplace-empty-state"><Gavel size={26} /><strong>No auctions yet</strong><span>Student auctions will appear here when someone lists one.</span></div>
-        ) : (
-          marketplaceListings
-            .filter((listing) => listing.listingType === "auction")
-            .map((listing) => {
-              const end = listing.auctionEndAt?.toDate?.() || new Date(listing.auctionEndAt);
-              const ended = !end || Number.isNaN(end.getTime()) || end <= new Date();
-              const minimumNextBid = Number(listing.currentPrice || listing.startingPrice || 0) + Number(listing.minimumBidIncrement || 1);
-              const isSelected = marketplaceSelectedAuction?.id === listing.id;
+      <div className="marketplace-toolbar">
+        <div>
+          <strong>{wantedListings.length}</strong>
+          <span>active wanted posts</span>
+        </div>
+        <button
+          type="button"
+          className="marketplace-primary-button"
+          onClick={() => {
+            resetWantedForm();
+            setWantedCreateOpen(true);
+          }}
+        >
+          <Plus size={16} />
+          Post Wanted Item
+        </button>
+      </div>
 
-              return (
-                <div className={`marketplace-auction-card ${isSelected ? "selected" : ""}`} key={listing.id}>
-                  <div className="marketplace-auction-card-main">
-                    <div className="marketplace-auction-image">
-                      {listing.imageThumbnails?.[0] || listing.imageUrls?.[0] ? <img src={listing.imageThumbnails?.[0] || listing.imageUrls?.[0]} alt={listing.title} /> : <Gavel size={22} />}
-                    </div>
-                    <div className="marketplace-auction-details">
-                      <span className="exchange-listing-category">{listing.category || "AUCTION"}</span>
-                      <h4>{listing.title}</h4>
-                      <p>{listing.description}</p>
-                      <div className="marketplace-auction-stats">
-                        <span>Current bid <strong>₹{Number(listing.currentPrice || listing.startingPrice || 0).toLocaleString("en-IN")}</strong></span>
-                        <span>{listing.bidCount || 0} bids</span>
-                        <span>{ended ? "Ended" : `Ends ${end.toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}`}</span>
-                      </div>
-                    </div>
-                  </div>
+      {wantedError && !wantedCreateOpen && (
+        <div className="marketplace-inline-error">{wantedError}</div>
+      )}
 
-                  {!ended && listing.sellerId !== authUser?.uid && (
-                    <div className="marketplace-bid-controls">
-                      <input
-                        id={`bid-${listing.id}`}
-                        type="number"
-                        min={minimumNextBid}
-                        step="1"
-                        placeholder={`Min ₹${Math.ceil(minimumNextBid)}`}
-                        disabled={marketplaceBidLoading}
-                      />
-                      <button
-                        type="button"
-                        disabled={marketplaceBidLoading}
-                        onClick={() => {
-                          const input = document.getElementById(`bid-${listing.id}`);
-                          placeMarketplaceBid(listing, input?.value);
-                        }}
-                      >
-                        {marketplaceBidLoading ? "..." : "Place Bid"}
-                      </button>
-                    </div>
-                  )}
+      {wantedLoading ? (
+        <div className="marketplace-empty-state">Loading wanted posts...</div>
+      ) : wantedListings.length === 0 ? (
+        <div className="marketplace-empty-state">
+          <Search size={26} />
+          <strong>No wanted posts yet</strong>
+          <span>Be the first student to say what you are looking for.</span>
+        </div>
+      ) : (
+        <div className="wanted-listings-grid">
+          {wantedListings.map((listing) => {
+            const description = listing.description || "";
+            const textKey = `wanted:${listing.id}`;
+            const expanded = expandedExchangeTextKeys.has(textKey);
+            const needsExpansion = description.length > 150;
+            const visibleDescription =
+              needsExpansion && !expanded
+                ? `${description.slice(0, 150).trimEnd()}…`
+                : description;
+            const isOwner = listing.requesterId === authUser?.uid;
 
-                  {listing.sellerId === authUser?.uid && (
-                    <div className="marketplace-own-auction-note">You are the seller — you cannot bid on this auction.</div>
-                  )}
-
-                  {listing.sellerId !== authUser?.uid &&
-                    listing.highestBidderId === authUser?.uid && (
-                      <div className="marketplace-highest-bidder-note">
-                        You are currently the highest bidder.
-                      </div>
-                    )}
-
-                  <button type="button" className="marketplace-history-button" onClick={() => loadMarketplaceBidHistory(listing)}>
-                    {isSelected ? "Hide bid history" : "View bid history"}
+            return (
+              <div className="wanted-listing-card" key={listing.id}>
+                {isOwner && (
+                  <button
+                    type="button"
+                    className="exchange-listing-delete wanted-listing-delete"
+                    onClick={() => deleteWantedListing(listing)}
+                    aria-label={`Delete ${listing.title || "wanted post"}`}
+                    title="Delete wanted post"
+                  >
+                    <Trash2 size={14} />
                   </button>
+                )}
 
-                  {isSelected && (
-                    <div className="marketplace-bid-history">
-                      {marketplaceBidHistoryLoading ? (
-                        <span>Loading bid history...</span>
-                      ) : marketplaceBidHistory.length === 0 ? (
-                        <span>No bids yet.</span>
-                      ) : (
-                        marketplaceBidHistory.map((bid, index) => (
-                          <div key={bid.id} className="marketplace-bid-history-row">
-                            <span>#{index + 1} {bid.bidderName || "CIT Student"}</span>
-                            <strong>₹{Number(bid.amount || 0).toLocaleString("en-IN")}</strong>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  )}
+                <div className="wanted-listing-topline">
+                  <span className="marketplace-type-badge-static">{listing.category || "OTHER"}</span>
+                  <span>{listing.condition || "Any condition"}</span>
                 </div>
-              );
-            })
+                <h4>{listing.title}</h4>
+                <p>{visibleDescription}</p>
+                {needsExpansion && (
+                  <button
+                    type="button"
+                    className="exchange-show-more"
+                    onClick={() => toggleExpandedExchangeText(textKey)}
+                  >
+                    {expanded ? "Show less" : "Show more"}
+                    <ChevronDown size={12} className={expanded ? "expanded" : ""} />
+                  </button>
+                )}
+                <div className="wanted-listing-budget">
+                  <span>Budget</span>
+                  <strong>
+                    {Number.isFinite(Number(listing.budget)) && Number(listing.budget) > 0
+                      ? `₹${Number(listing.budget).toLocaleString("en-IN")}`
+                      : "Flexible"}
+                  </strong>
+                </div>
+                <div className="wanted-listing-owner">
+                  <strong>{listing.requesterName || "CIT Student"}</strong>
+                  <span>{listing.requesterEmail || "Email unavailable"}</span>
+                </div>
+                {listing.requesterId !== authUser?.uid && (
+                  <button
+                    type="button"
+                    className="marketplace-enquire-button"
+                    onClick={() => sendWantedEnquiry(listing)}
+                  >
+                    <MessageCircle size={14} />
+                    I Can Help
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {wantedCreateOpen && (
+        <div className="wanted-create-panel">
+          <div className="wanted-create-header">
+            <div>
+              <span className="community-resource-category">NEW WANTED POST</span>
+              <h4>What are you looking for?</h4>
+            </div>
+            <button
+              type="button"
+              className="exchange-modal-close"
+              onClick={() => setWantedCreateOpen(false)}
+              aria-label="Close wanted form"
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          <div className="marketplace-form">
+            <label>
+              Looking for
+              <input
+                value={wantedForm.title}
+                onChange={(e) => setWantedForm((prev) => ({ ...prev, title: e.target.value }))}
+                placeholder="e.g. Casio FX-991ES calculator"
+                maxLength={120}
+              />
+            </label>
+
+            <label>
+              Description
+              <textarea
+                value={wantedForm.description}
+                onChange={(e) => setWantedForm((prev) => ({ ...prev, description: e.target.value }))}
+                placeholder="Tell students what you need and any useful details."
+                maxLength={500}
+                rows={3}
+              />
+            </label>
+
+            <div className="marketplace-form-grid">
+              <label>
+                Category
+                <StyledSelect
+                  value={wantedForm.category}
+                  options={["Textbooks", "Project Kits", "Electronics", "Calculators", "Computers", "Accessories", "Sports", "Furniture", "Other"]}
+                  onChange={(value) => setWantedForm((prev) => ({ ...prev, category: value }))}
+                  ariaLabel="Wanted item category"
+                />
+              </label>
+              <label>
+                Condition
+                <StyledSelect
+                  value={wantedForm.condition}
+                  options={["Any", "New", "Like New", "Good", "Fair", "For Parts"]}
+                  onChange={(value) => setWantedForm((prev) => ({ ...prev, condition: value }))}
+                  ariaLabel="Wanted item condition"
+                />
+              </label>
+            </div>
+
+            <label>
+              Budget (₹) <small>optional</small>
+              <input
+                type="number"
+                min="0"
+                value={wantedForm.budget}
+                onChange={(e) => setWantedForm((prev) => ({ ...prev, budget: e.target.value }))}
+                placeholder="800"
+              />
+            </label>
+
+            {wantedError && <div className="marketplace-inline-error">{wantedError}</div>}
+
+            <div className="marketplace-safety-note">
+              <Shield size={15} />
+              <span>Your college email will be visible on the wanted post so interested students know who to contact.</span>
+            </div>
+
+            <button
+              type="button"
+              className="marketplace-primary-button marketplace-submit-button"
+              disabled={wantedCreating}
+              onClick={createWantedListing}
+            >
+              {wantedCreating ? "Publishing..." : "Publish Wanted Post"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  </div>
+)}
+
+{marketplaceEnquiry && (
+  <div className="exchange-modal-overlay marketplace-enquiry-overlay">
+    <div className="exchange-modal marketplace-enquiry-modal">
+      <button
+        type="button"
+        className="marketplace-enquiry-close"
+        onClick={closeMarketplaceEnquiry}
+        aria-label="Close enquiry"
+        title="Close"
+      >
+        <X size={16} />
+      </button>
+
+      <div className="marketplace-enquiry-icon">
+        <MessageCircle size={20} />
+      </div>
+      <span className="eyebrow">NEW ENQUIRY</span>
+      <h3>
+        {marketplaceEnquiry.type === "wanted_enquiry"
+          ? `${marketplaceEnquiry.helperName || marketplaceEnquiry.actorName || "CIT Student"} can help with your item`
+          : `${marketplaceEnquiry.actorName || "CIT Student"} is interested in your item`}
+      </h3>
+      <p className="marketplace-enquiry-item">
+        {marketplaceEnquiry.listingTitle || "Marketplace item"}
+        {marketplaceEnquiry.type !== "wanted_enquiry" && Number(marketplaceEnquiry.listingPrice || 0) > 0 && (
+          <strong>₹{Number(marketplaceEnquiry.listingPrice).toLocaleString("en-IN")}</strong>
         )}
+      </p>
+
+      <div className="marketplace-enquiry-person">
+        <strong>
+          {marketplaceEnquiry.type === "wanted_enquiry"
+            ? (marketplaceEnquiry.helperName || marketplaceEnquiry.actorName || "CIT Student")
+            : (marketplaceEnquiry.requesterName || "CIT Student")}
+        </strong>
+        <span>
+          {marketplaceEnquiry.type === "wanted_enquiry"
+            ? (marketplaceEnquiry.helperEmail || "Email unavailable")
+            : (marketplaceEnquiry.requesterEmail || "Email unavailable")}
+        </span>
+        {((marketplaceEnquiry.type === "wanted_enquiry" && (marketplaceEnquiry.helperDepartment || marketplaceEnquiry.helperYear)) ||
+          (marketplaceEnquiry.type !== "wanted_enquiry" && (marketplaceEnquiry.requesterDepartment || marketplaceEnquiry.requesterYear))) && (
+          <small>
+            {(marketplaceEnquiry.type === "wanted_enquiry"
+              ? [marketplaceEnquiry.helperDepartment, marketplaceEnquiry.helperYear]
+              : [marketplaceEnquiry.requesterDepartment, marketplaceEnquiry.requesterYear]
+            )
+              .filter(Boolean)
+              .join(" · ")}
+          </small>
+        )}
+      </div>
+
+      <div className="marketplace-enquiry-tip">
+        <Shield size={14} />
+        <span>Quick tip: Check the requester's profile and college email before starting a conversation.</span>
+      </div>
+
+      <button
+        type="button"
+        className="marketplace-profile-button"
+        onClick={viewMarketplaceEnquiryProfile}
+      >
+        <User size={14} />
+        View Profile
+      </button>
+
+      <div className="marketplace-enquiry-actions">
+        <button type="button" className="secondary-button" onClick={closeMarketplaceEnquiry}>
+          Decline
+        </button>
+        <button type="button" className="primary-button" onClick={startMarketplaceEnquiryChat}>
+          <MessageCircle size={14} />
+          Start Chat
+        </button>
       </div>
     </div>
   </div>
 )}
+
+{marketplaceDeleteTarget && (
+  <div
+    className="resource-delete-overlay marketplace-delete-overlay"
+    onClick={(event) => {
+      if (event.target === event.currentTarget) {
+        setMarketplaceDeleteTarget(null);
+      }
+    }}
+  >
+    <div className="resource-delete-modal marketplace-delete-modal">
+      <button
+        type="button"
+        className="marketplace-enquiry-close"
+        onClick={() => setMarketplaceDeleteTarget(null)}
+        aria-label="Close delete confirmation"
+        title="Close"
+      >
+        <X size={16} />
+      </button>
+
+      <div className="resource-delete-icon">
+        <Trash2 size={24} />
+      </div>
+      <span className="resource-delete-eyebrow">DELETE LISTING</span>
+      <h2>Delete this item?</h2>
+      <p>
+        This will remove <strong>{marketplaceDeleteTarget.title || "your listing"}</strong> from Buy &amp; Sell.
+      </p>
+      <div className="resource-delete-actions">
+        <button
+          type="button"
+          className="resource-delete-cancel"
+          onClick={() => setMarketplaceDeleteTarget(null)}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="resource-delete-confirm"
+          onClick={confirmDeleteMarketplaceListing}
+        >
+          Delete Listing
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+{wantedDeleteTarget && (
+  <div
+    className="resource-delete-overlay marketplace-delete-overlay"
+    onClick={(event) => {
+      if (event.target === event.currentTarget) {
+        setWantedDeleteTarget(null);
+      }
+    }}
+  >
+    <div className="resource-delete-modal marketplace-delete-modal">
+      <button
+        type="button"
+        className="marketplace-enquiry-close"
+        onClick={() => setWantedDeleteTarget(null)}
+        aria-label="Close delete confirmation"
+        title="Close"
+      >
+        <X size={16} />
+      </button>
+
+      <div className="resource-delete-icon">
+        <Trash2 size={24} />
+      </div>
+      <span className="resource-delete-eyebrow">DELETE WANTED POST</span>
+      <h2>Delete this wanted post?</h2>
+      <p>
+        This will remove <strong>{wantedDeleteTarget.title || "your wanted post"}</strong> from Wanted / Looking For.
+      </p>
+      <div className="resource-delete-actions">
+        <button
+          type="button"
+          className="resource-delete-cancel"
+          onClick={() => setWantedDeleteTarget(null)}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="resource-delete-confirm"
+          onClick={confirmDeleteWantedListing}
+        >
+          Delete Post
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+{tradeGiveDeleteTarget && (
+  <div
+    className="resource-delete-overlay marketplace-delete-overlay"
+    onClick={(event) => {
+      if (event.target === event.currentTarget) {
+        setTradeGiveDeleteTarget(null);
+      }
+    }}
+  >
+    <div className="resource-delete-modal marketplace-delete-modal">
+      <button
+        type="button"
+        className="marketplace-enquiry-close"
+        onClick={() => setTradeGiveDeleteTarget(null)}
+        aria-label="Close delete confirmation"
+        title="Close"
+      >
+        <X size={16} />
+      </button>
+
+      <div className="resource-delete-icon">
+        <Trash2 size={24} />
+      </div>
+      <span className="resource-delete-eyebrow">DELETE TRADE / GIVE LISTING</span>
+      <h2>Delete this listing?</h2>
+      <p>
+        This will remove <strong>{tradeGiveDeleteTarget.title || "your listing"}</strong> from Trade or Give.
+      </p>
+      <div className="resource-delete-actions">
+        <button
+          type="button"
+          className="resource-delete-cancel"
+          onClick={() => setTradeGiveDeleteTarget(null)}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="resource-delete-confirm"
+          onClick={confirmDeleteTradeGiveListing}
+        >
+          Delete Listing
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
 {editProfileOpen && (
   <div className="hackathon-modal-overlay">
     <div className="hackathon-modal edit-profile-modal">
@@ -11171,27 +12485,30 @@ onSubmit={async (e) => {
   const form = e.currentTarget;
   const formData = new FormData(form);
 
+  const identity = getCITEmailIdentity(authUser.email);
+  const lockedNameSequence = profileData.lockedNameSequence || identity?.nameSequence || "";
+  const lockedDepartment = identity?.department || normalizeDepartment(profileData.department || "");
+  const lockedYear = getAcademicYearLabelFromBatch(identity?.batchYear) || profileData.year || "";
+  const rawName = formData.get("name")?.toString() || "";
+  const nameValidation = validateLockedNameFormat(rawName, lockedNameSequence);
+
+  if (!nameValidation.valid) {
+    setProfileNameError(nameValidation.message);
+    return;
+  }
+
   const updatedProfile = {
-    name:
-      formData.get("name")?.toString().trim() || "",
-
-    college:
-      formData.get("college")?.toString().trim() || "",
-
-    department:
-      normalizeDepartment(formData.get("department")?.toString() || ""),
-
-    year:
-      formData.get("year")?.toString() || "",
-
-    bio:
-      formData.get("bio")?.toString().trim() || "",
-
-    skills:
-      formData.get("skills")?.toString().trim() || "",
-
+    name: nameValidation.canonical,
+    college: CAMPUSCONNECT_COLLEGE,
+    department: lockedDepartment,
+    year: lockedYear,
+    bio: formData.get("bio")?.toString().trim() || "",
+    skills: formData.get("skills")?.toString().trim() || "",
     email: authUser.email || "",
     campusConnectId: profileData.campusConnectId || "",
+    lockedNameSequence,
+    identityProfileVersion: IDENTITY_PROFILE_VERSION,
+    identitySetupCompleted: true,
   };
 
   try {
@@ -11258,6 +12575,8 @@ onSubmit={async (e) => {
     }
 
     setProfileData(updatedProfile);
+    setProfileNameDraft(updatedProfile.name);
+    setProfileNameError("");
 
     setEditProfileOpen(false);
 
@@ -11281,47 +12600,85 @@ onSubmit={async (e) => {
   <input
     type="text"
     name="name"
-    defaultValue={profileData.name}
+    value={profileNameDraft}
+    onChange={(event) => {
+      const nextValue = event.target.value;
+      const identity = getCITEmailIdentity(authUser?.email);
+      const lockedSequence =
+        profileData.lockedNameSequence || identity?.nameSequence || "";
+
+      if (!lockedSequence) {
+        return;
+      }
+
+      // The letters are immutable. The only editable characters are spaces.
+      // Backspace/Delete can therefore remove spaces, while typed/pasted
+      // letters that would alter the email-derived sequence are rejected.
+      const spaces = (nextValue.match(/ /g) || []).length;
+      const compacted = nextValue.replace(/ /g, "").toLowerCase();
+
+      if (!/^[A-Za-z ]*$/.test(nextValue)) return;
+      if (spaces > 3) return;
+      if (/^ | $| {2,}/.test(nextValue)) return;
+      if (compacted !== lockedSequence.toLowerCase()) return;
+
+      setProfileNameDraft(formatLockedName(nextValue));
+      setProfileNameError("");
+    }}
+    onBlur={() => setProfileNameDraft(formatLockedName(profileNameDraft))}
     required
+    autoComplete="name"
+    spellCheck="false"
+    aria-describedby="locked-name-hint"
   />
+  <span className="profile-locked-hint" id="locked-name-hint">
+    Letters are locked to your CIT email. You may insert up to 3 spaces for formatting.
+  </span>
+  {profileNameError && <span className="profile-field-error">{profileNameError}</span>}
 </label>
 
 <label>
   College
   <input
     type="text"
-    name="college"
-    defaultValue={profileData.college}
-    required
+    value={CAMPUSCONNECT_COLLEGE}
+    readOnly
+    aria-readonly="true"
+    className="profile-readonly-input"
+  />
+</label>
+
+<label>
+  College Email
+  <input
+    type="email"
+    value={authUser?.email || ""}
+    readOnly
+    aria-readonly="true"
+    className="profile-readonly-input"
   />
 </label>
 
 <label>
   Department
-  <select
-    name="department"
-    defaultValue={normalizeDepartment(profileData.department)}
-    required
-  >
-    <option value="" disabled>Select your department</option>
-    {DEPARTMENT_OPTIONS.map((department) => (
-      <option key={department} value={department}>{department}</option>
-    ))}
-  </select>
+  <input
+    type="text"
+    value={normalizeDepartment(profileData.department) || "Not detected"}
+    readOnly
+    aria-readonly="true"
+    className="profile-readonly-input"
+  />
 </label>
 
 <label>
   Year
-  <select
-    name="year"
-    defaultValue={profileData.year}
-    required
-  >
-    <option value="1st Year">1st Year</option>
-    <option value="2nd Year">2nd Year</option>
-    <option value="3rd Year">3rd Year</option>
-    <option value="4th Year">4th Year</option>
-  </select>
+  <input
+    type="text"
+    value={profileData.year || "Not detected"}
+    readOnly
+    aria-readonly="true"
+    className="profile-readonly-input"
+  />
 </label>
 
 <label>
@@ -11866,7 +13223,11 @@ onSubmit={async (e) => {
 
             <button
               className="hackathon-modal-close"
-              onClick={() => setShareResourceOpen(false)}
+              onClick={() => {
+                setShareResourceOpen(false);
+                setShareResourceCategory("");
+                setShareResourceImageFile(null);
+              }}
             >
               ×
             </button>
@@ -11913,44 +13274,72 @@ onSubmit={async (e) => {
     return;
   }
 
-const newResource = {
-  title,
-  category,
-  description,
-  link,
-  userId: authUser?.uid || "",
-  userEmail: authUser?.email || "",
-  createdAt: new Date(),
-};
-
-  setCommunityResources((prev) => [
-    ...prev,
-    newResource,
-  ]);
-  
-  if (authUser) {
   try {
-    await setDoc(
-      doc(db, "users", authUser.uid),
-      {
-        resourcesShared: increment(1),
-      },
-      { merge: true }
+    setShareResourceUploading(Boolean(shareResourceImageFile));
+
+    const uploadedCover = shareResourceImageFile
+      ? await uploadShareResourceImage(shareResourceImageFile)
+      : null;
+
+    const newResource = {
+      title,
+      category,
+      description,
+      link,
+      userId: authUser.uid,
+      userName:
+        profileData.name ||
+        authUser.displayName ||
+        authUser.email?.split("@")[0] ||
+        "CIT Student",
+      userEmail: authUser.email || "",
+      userDepartment: profileData.department || "",
+      userYear: profileData.year || "",
+      coverImageUrl: uploadedCover?.url || "",
+      coverImageThumbnailUrl: uploadedCover?.thumbnailUrl || "",
+      coverImageFileId: uploadedCover?.fileId || "",
+      coverImageFileName: uploadedCover?.fileName || "",
+      createdAt: serverTimestamp(),
+    };
+
+    const resourceRef = await addDoc(
+      collection(db, "communityResources"),
+      newResource
     );
 
-    setActivityData((prev) => ({
+    setCommunityResources((prev) => [
       ...prev,
-      resourcesShared: prev.resourcesShared + 1,
-    }));
+      { id: resourceRef.id, ...newResource, createdAt: new Date() },
+    ]);
+
+    try {
+      await setDoc(
+        doc(db, "users", authUser.uid),
+        {
+          resourcesShared: increment(1),
+        },
+        { merge: true }
+      );
+    } catch (activityError) {
+      console.error("RESOURCE ACTIVITY UPDATE ERROR:", activityError);
+    }
   } catch (error) {
-    console.error(
-      "RESOURCE ACTIVITY UPDATE ERROR:",
-      error
-    );
+    console.error("RESOURCE SHARE ERROR:", error);
+    showActionToast("Unable to share the resource right now.");
+    return;
+  } finally {
+    setShareResourceUploading(false);
   }
-}
+
+  setShareResourceImageFile(null);
+
+  setActivityData((prev) => ({
+    ...prev,
+    resourcesShared: prev.resourcesShared + 1,
+  }));
 
   setShareResourceOpen(false);
+  setShareResourceCategory("");
   setShowSharedResources(true);
   setCommunityFilter(category);
   setCommunitySearch("");
@@ -11976,27 +13365,15 @@ const newResource = {
 
               <label>
                 Category
-                <select
-  name="category"
-  defaultValue=""
-  required
->
-                  <option value="" disabled>
-                    Select a category
-                  </option>
-
-                  <option value="Question Papers">
-                    Question Papers
-                  </option>
-
-                  <option value="Hackathon Resources">
-                    Hackathon Resources
-                  </option>
-
-                  <option value="Projects & References">
-                    Projects & References
-                  </option>
-                </select>
+                <StyledSelect
+                  name="category"
+                  value={shareResourceCategory}
+                  options={["Question Papers", "Hackathon Resources", "Projects & References"]}
+                  onChange={setShareResourceCategory}
+                  ariaLabel="Select resource category"
+                  placeholder="Select a category"
+                  required
+                />
               </label>
 
               <label>
@@ -12007,6 +13384,23 @@ const newResource = {
   rows="4"
   required
 />
+              </label>
+
+              <label className="community-resource-image-picker">
+                Cover Image <small>(optional · 1 image · max 3 MB · JPG, PNG, WebP)</small>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(e) => {
+                    handleShareResourceImage(e.target.files);
+                    e.target.value = "";
+                  }}
+                  disabled={shareResourceUploading}
+                />
+                <div className="community-resource-image-picker-box">
+                  <FileImage size={16} />
+                  {shareResourceImageFile ? shareResourceImageFile.name : "Choose cover image"}
+                </div>
               </label>
 
               <label>
@@ -12022,12 +13416,326 @@ const newResource = {
               <button
                 type="submit"
                 className="primary-button"
+                disabled={shareResourceUploading}
               >
-                Share Resource
+                {shareResourceUploading
+                  ? "Uploading..."
+                  : shareSuccess
+                    ? "Shared Successfully!"
+                    : "Share Resource"}
               </button>
 
             </form>
 
+          </div>
+        </div>
+      )}
+
+
+      {/* ================= ONE-TIME CIT IDENTITY SETUP ================= */}
+      {identitySetupOpen && authUser && (
+        <div
+          className="hackathon-modal-overlay identity-setup-overlay"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div
+            className="hackathon-modal identity-setup-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="identity-setup-title"
+          >
+            <div className="hackathon-modal-icon">
+              <Shield size={28} />
+            </div>
+            <span className="eyebrow">ONE-TIME PROFILE SETUP</span>
+            <h2 id="identity-setup-title">Confirm your CampusConnect name</h2>
+            <p className="hackathon-modal-description">
+              Your CIT email determines your name, department, and academic batch. You may only insert spaces into the email-derived name sequence for a clean display name.
+            </p>
+
+            <div className="identity-setup-source-card">
+              <div><span>College Email</span><strong>{authUser.email}</strong></div>
+              <div><span>Department</span><strong>{profileData.department || "Not detected"}</strong></div>
+              <div><span>Current Year</span><strong>{profileData.year || "Not detected"}</strong></div>
+            </div>
+
+            <label className="identity-setup-name-label">
+              <span>Display Name</span>
+              <input
+                type="text"
+                name="campusconnectDisplayName"
+                value={identityNameDraft}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  const identity = getCITEmailIdentity(authUser.email);
+                  const lockedSequence =
+                    identity?.nameSequence || profileData.lockedNameSequence || "";
+
+                  if (!lockedSequence) {
+                    setIdentitySetupError("Your CIT email could not be used to determine the official name format.");
+                    return;
+                  }
+
+                  if (!/^[A-Za-z ]*$/.test(nextValue)) {
+                    setIdentitySetupError("Only letters and spaces are allowed.");
+                    return;
+                  }
+
+                  const spaces = (nextValue.match(/ /g) || []).length;
+                  if (spaces > 3) {
+                    setIdentitySetupError("You can insert a maximum of 3 spaces.");
+                    return;
+                  }
+
+                  if (/^ | $| {2,}/.test(nextValue)) {
+                    setIdentitySetupError("Use single spaces between name parts only.");
+                    return;
+                  }
+
+                  const compacted = nextValue.replace(/ /g, "").toLowerCase();
+                  if (compacted !== lockedSequence.toLowerCase()) {
+                    setIdentitySetupError("Only spaces may be inserted. The letters and their order must match your CIT email.");
+                    return;
+                  }
+
+                  setIdentityNameDraft(formatLockedName(nextValue));
+                  setIdentitySetupError("");
+                }}
+                onBlur={() => setIdentityNameDraft(formatLockedName(identityNameDraft))}
+                autoFocus
+                autoComplete="new-password"
+                data-form-type="other"
+                data-lpignore="true"
+                spellCheck="false"
+                aria-describedby="identity-setup-name-hint"
+              />
+              <small id="identity-setup-name-hint">Maximum 3 spaces. Letters and their order must stay exactly as derived from your CIT email.</small>
+            </label>
+
+            {identitySetupError && <div className="auth-error-message">⚠ {identitySetupError}</div>}
+
+            <button
+              type="button"
+              className="primary-button identity-setup-save"
+              disabled={identitySetupSaving}
+              onClick={async () => {
+                const identity = getCITEmailIdentity(authUser.email);
+                const lockedNameSequence = identity?.nameSequence || profileData.lockedNameSequence || "";
+                const validation = validateLockedNameFormat(identityNameDraft, lockedNameSequence);
+                if (!validation.valid) {
+                  setIdentitySetupError(validation.message);
+                  return;
+                }
+
+                const derivedDepartment = identity?.department || profileData.department || "";
+                const derivedYear = getAcademicYearLabelFromBatch(identity?.batchYear) || profileData.year || "";
+                setIdentitySetupSaving(true);
+                setIdentitySetupError("");
+
+                try {
+                  await setDoc(
+                    doc(db, "users", authUser.uid),
+                    {
+                      name: validation.canonical,
+                      college: CAMPUSCONNECT_COLLEGE,
+                      department: derivedDepartment,
+                      year: derivedYear,
+                      email: authUser.email || "",
+                      lockedNameSequence,
+                      identityProfileVersion: IDENTITY_PROFILE_VERSION,
+                      identitySetupCompleted: true,
+                    },
+                    { merge: true }
+                  );
+
+                  setProfileData((previous) => ({
+                    ...previous,
+                    name: validation.canonical,
+                    college: CAMPUSCONNECT_COLLEGE,
+                    department: normalizeDepartment(derivedDepartment),
+                    year: derivedYear,
+                    email: authUser.email || "",
+                    lockedNameSequence,
+                    identityProfileVersion: IDENTITY_PROFILE_VERSION,
+                    identitySetupCompleted: true,
+                  }));
+
+                  setIdentityNameDraft(validation.canonical);
+                  setIdentitySetupOpen(false);
+                  if (identityWelcomePendingRef.current) {
+                    identityWelcomePendingRef.current = false;
+                    setWelcomeOpen(true);
+                  }
+                } catch (error) {
+                  console.error("IDENTITY SETUP SAVE ERROR:", error);
+                  setIdentitySetupError("Unable to save your profile identity right now. Please try again.");
+                } finally {
+                  setIdentitySetupSaving(false);
+                }
+              }}
+            >
+              {identitySetupSaving ? "Saving..." : "Continue to CampusConnect"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ================= FEEDBACK & SUPPORT ================= */}
+      {feedbackSupportOpen && (
+        <div
+          className="hackathon-modal-overlay feedback-support-overlay"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setFeedbackSupportOpen(false);
+          }}
+        >
+          <div
+            className="hackathon-modal feedback-support-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="feedback-support-title"
+          >
+            <button
+              type="button"
+              className="hackathon-modal-close"
+              onClick={() => setFeedbackSupportOpen(false)}
+              aria-label="Close Feedback & Support"
+            >
+              <X size={18} />
+            </button>
+
+            <div className="feedback-support-icon"><CircleHelp size={26} /></div>
+            <span className="eyebrow">CAMPUSCONNECT SUPPORT</span>
+            <h2 id="feedback-support-title">Feedback &amp; Support</h2>
+
+            <div className="feedback-support-developer-note">
+              <p>CampusConnect is built to help students connect, collaborate, share resources, and discover opportunities.</p>
+              <p>We're constantly improving, so if you spot a bug or have an idea, we'd love to hear it. Please also help keep this space safe by not sharing misleading links or anything harmful.</p>
+              <p><strong>Thank you, and happy connecting! 🎓</strong></p>
+              <p><em>— CampusConnect Developer</em></p>
+            </div>
+
+            <div className="feedback-support-services">
+              <a
+                className="feedback-support-service"
+                href={getDeveloperMailtoUrl("[CampusConnect] Bug Report")}
+                onClick={(event) =>
+                  handleDeveloperEmailClick(
+                    event,
+                    "[CampusConnect] Bug Report"
+                  )
+                }
+                aria-label="Report a Bug"
+              >
+                <span className="feedback-support-service-icon">🐞</span>
+                <span><strong>Report a Bug</strong><small>Something not working? Let us know.</small></span>
+                <Mail size={16} />
+              </a>
+              <a
+                className="feedback-support-service"
+                href={getDeveloperMailtoUrl("[CampusConnect] Improvement Suggestion")}
+                onClick={(event) =>
+                  handleDeveloperEmailClick(
+                    event,
+                    "[CampusConnect] Improvement Suggestion"
+                  )
+                }
+                aria-label="Suggest an Improvement"
+              >
+                <span className="feedback-support-service-icon">💡</span>
+                <span><strong>Suggest an Improvement</strong><small>Got an idea to make CampusConnect better? Share it with us.</small></span>
+                <Mail size={16} />
+              </a>
+              <a
+                className="feedback-support-service"
+                href={getDeveloperMailtoUrl("[CampusConnect] Developer Contact")}
+                onClick={(event) =>
+                  handleDeveloperEmailClick(
+                    event,
+                    "[CampusConnect] Developer Contact"
+                  )
+                }
+                aria-label="Contact Developer"
+              >
+                <span className="feedback-support-service-icon">✉️</span>
+                <span><strong>Contact Developer</strong><small>Questions or anything else? Send a direct message.</small></span>
+                <Mail size={16} />
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= FIRST-TIME WELCOME MODAL ================= */}
+      {welcomeOpen && authUser && (
+        <div
+          className="hackathon-modal-overlay welcome-modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !welcomeSaving) {
+              dismissWelcome();
+            }
+          }}
+        >
+          <div
+            className="hackathon-modal welcome-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="campusconnect-welcome-title"
+          >
+            <button
+              type="button"
+              className="hackathon-modal-close"
+              onClick={dismissWelcome}
+              disabled={welcomeSaving}
+              aria-label="Close welcome message"
+            >
+              <X size={18} />
+            </button>
+
+            <div className="welcome-modal-icon">
+              <Rocket size={26} />
+            </div>
+
+            <span className="eyebrow">WELCOME TO CAMPUSCONNECT</span>
+            <h2 id="campusconnect-welcome-title">Hey, {profileData.name || authUser.displayName || authUser.email?.split("@")[0] || "CIT Student"}! 👋</h2>
+            <p className="welcome-modal-lead">Your campus, all in one place.</p>
+            <p className="hackathon-modal-description welcome-modal-description">
+              Connect with students, build teams, share resources, discover opportunities, and exchange useful items around campus.
+            </p>
+
+            <div className="welcome-modal-guides">
+              <div className="welcome-modal-guide">
+                <div className="welcome-modal-guide-icon"><Bell size={16} /></div>
+                <div>
+                  <strong>Stay updated</strong>
+                  <span>Check your notifications regularly for connection requests, help requests, and exchange updates.</span>
+                </div>
+              </div>
+
+              <div className="welcome-modal-guide">
+                <div className="welcome-modal-guide-icon"><User size={16} /></div>
+                <div>
+                  <strong>Complete your profile</strong>
+                  <span>Add your skills and interests so students can connect with you more easily.</span>
+                </div>
+              </div>
+
+              <div className="welcome-modal-guide">
+                <div className="welcome-modal-guide-icon"><Shield size={16} /></div>
+                <div>
+                  <strong>Share responsibly</strong>
+                  <span>Never share passwords, OTPs, financial details, private documents, or other sensitive information. Avoid unnecessary or misleading photos and videos.</span>
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="primary-button welcome-get-started"
+              onClick={dismissWelcome}
+              disabled={welcomeSaving}
+            >
+              {welcomeSaving ? "Saving..." : "Get Started →"}
+            </button>
           </div>
         </div>
       )}
@@ -12040,7 +13748,7 @@ const newResource = {
             if (e.target === e.currentTarget) closeTeamPreview();
           }}
         >
-          <div className="hackathon-modal team-status-modal team-invite-modal">
+          <div className="hackathon-modal team-status-modal team-preview-modal team-preview-modal-shell">
             <button
               type="button"
               className="hackathon-modal-close"
@@ -12065,7 +13773,7 @@ const newResource = {
               <>
                 <div className="team-status-section">
                   <div className="team-status-section-title">Team Leader</div>
-                  <div className="team-status-member">
+                  <div className="team-status-member team-preview-leader-row">
                     <div className="team-status-member-avatar"><User size={15} /></div>
                     <div className="team-status-member-info">
                       <strong>{teamPreviewOwner?.name || selectedTeamPreview.createdByName || "Team Leader"}</strong>
@@ -12074,7 +13782,7 @@ const newResource = {
                     {teamPreviewOwner?.id && (
                       <button
                         type="button"
-                        className="team-member-profile-button"
+                        className="team-member-profile-button team-preview-profile-button"
                         onClick={() => openTeamMemberProfile({ memberId: teamPreviewOwner.id, memberName: teamPreviewOwner.name })}
                       >
                         <User size={13} />
@@ -12166,7 +13874,7 @@ const newResource = {
             </p>
 
             {teamStatusLoading ? (
-              <div className="team-status-loading">Loading your team status...</div>
+              <div className="team-status-loading">Loading team status...</div>
             ) : (
               <>
                 <div className="team-status-id-pill">{selectedTeam.teamConnectId || `TEAM-${selectedTeam.id.slice(0, 8).toUpperCase()}`}</div>
@@ -12199,7 +13907,7 @@ const newResource = {
                               <User size={13} />
                               View Profile
                             </button>
-                            {member.role !== "owner" && (
+                            {!teamStatusReadOnly && member.role !== "owner" && (
                               <button
                                 type="button"
                                 className="team-member-profile-button"
@@ -12225,17 +13933,19 @@ const newResource = {
                   </div>
                 </div>
 
-                <div style={{ marginTop: "18px", display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" }}>
-                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                    <button
-                      type="button"
-                      className="primary-button"
-                      onClick={() => openTeamInviteStudents(selectedTeam)}
-                      disabled={teamInviteLoading || selectedTeamMembers.length >= (Number(selectedTeam.members) || 1)}
-                    >
-                      <UserPlus size={16} />
-                      Invite Students
-                    </button>
+                <div className={`team-status-actions ${teamStatusReadOnly ? "member-view" : ""}`}>
+                  <div className="team-status-primary-actions">
+                    {!teamStatusReadOnly && (
+                      <button
+                        type="button"
+                        className="primary-button"
+                        onClick={() => openTeamInviteStudents(selectedTeam)}
+                        disabled={teamInviteLoading || selectedTeamMembers.length >= (Number(selectedTeam.members) || 1)}
+                      >
+                        <UserPlus size={16} />
+                        Invite Students
+                      </button>
+                    )}
 
                     <button
                       type="button"
@@ -12245,16 +13955,33 @@ const newResource = {
                       <MessageCircle size={16} />
                       Team Chat
                     </button>
+
+                    {teamStatusReadOnly && (
+                      <button
+                        type="button"
+                        className="secondary-button team-leave-status-button"
+                        disabled={teamActionLoading}
+                        onClick={() => {
+                          setTeamStatusOpen(false);
+                          setSelectedTeam(null);
+                          leaveTeam(selectedTeam);
+                        }}
+                      >
+                        Leave Team
+                      </button>
+                    )}
                   </div>
 
-                  <button
-                    type="button"
-                    className="team-delete-button"
-                    disabled={teamActionLoading}
-                    onClick={() => deleteTeam(selectedTeam)}
-                  >
-                    Delete Team
-                  </button>
+                  {!teamStatusReadOnly && (
+                    <button
+                      type="button"
+                      className="team-delete-button"
+                      disabled={teamActionLoading}
+                      onClick={() => deleteTeam(selectedTeam)}
+                    >
+                      Delete Team
+                    </button>
+                  )}
                 </div>
               </>
             )}
@@ -12486,17 +14213,19 @@ const newResource = {
 
             <label className="team-chat-report-label">
               Reason
-              <select
+              <StyledSelect
                 value={directMessageReportReason}
-                onChange={(event) => setDirectMessageReportReason(event.target.value)}
-              >
-                <option value="">Select a reason</option>
-                <option value="spam">Spam</option>
-                <option value="harassment">Harassment / bullying</option>
-                <option value="inappropriate">Inappropriate content</option>
-                <option value="hate_or_abusive">Hate / abusive content</option>
-                <option value="other">Other</option>
-              </select>
+                options={[
+                  { value: "spam", label: "Spam" },
+                  { value: "harassment", label: "Harassment / bullying" },
+                  { value: "inappropriate", label: "Inappropriate content" },
+                  { value: "hate_or_abusive", label: "Hate / abusive content" },
+                  { value: "other", label: "Other" },
+                ]}
+                onChange={setDirectMessageReportReason}
+                ariaLabel="Select direct message report reason"
+                placeholder="Select a reason"
+              />
             </label>
 
             <label className="team-chat-report-label">
@@ -12585,17 +14314,19 @@ const newResource = {
 
             <label className="team-chat-report-label">
               Reason
-              <select
+              <StyledSelect
                 value={teamChatReportReason}
-                onChange={(e) => setTeamChatReportReason(e.target.value)}
-              >
-                <option value="">Select a reason</option>
-                <option value="spam">Spam</option>
-                <option value="harassment">Harassment / bullying</option>
-                <option value="inappropriate">Inappropriate content</option>
-                <option value="hate_or_abusive">Hate / abusive content</option>
-                <option value="other">Other</option>
-              </select>
+                options={[
+                  { value: "spam", label: "Spam" },
+                  { value: "harassment", label: "Harassment / bullying" },
+                  { value: "inappropriate", label: "Inappropriate content" },
+                  { value: "hate_or_abusive", label: "Hate / abusive content" },
+                  { value: "other", label: "Other" },
+                ]}
+                onChange={setTeamChatReportReason}
+                ariaLabel="Select team chat report reason"
+                placeholder="Select a reason"
+              />
             </label>
 
             <label className="team-chat-report-label">
@@ -12931,6 +14662,73 @@ const newResource = {
             <div className="team-confirm-actions">
               <button type="button" className="team-confirm-cancel" onClick={() => setTeamDeleteTarget(null)}>Cancel</button>
               <button type="button" className="team-confirm-danger" disabled={teamActionLoading} onClick={confirmDeleteTeam}>{teamActionLoading ? "Deleting..." : "Delete Team"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= DIRECT CONVERSATION ACTION CONFIRMATION ================= */}
+      {directConversationConfirm && (
+        <div
+          className="team-confirm-overlay direct-conversation-confirm-overlay"
+          style={{ zIndex: 10200 }}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setDirectConversationConfirm(null);
+          }}
+        >
+          <div
+            className="team-confirm-modal direct-conversation-confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="direct-conversation-confirm-title"
+          >
+            <button type="button" className="team-confirm-close" onClick={() => setDirectConversationConfirm(null)} aria-label="Close confirmation">
+              <X size={17} />
+            </button>
+
+            <div className={`team-confirm-icon ${directConversationConfirm.action === "unblock" ? "" : "danger"}`}>
+              {directConversationConfirm.action === "delete" ? <Trash2 size={22} /> : directConversationConfirm.action === "unblock" ? <UserCheck size={22} /> : <UserX size={22} />}
+            </div>
+
+            <span className="eyebrow">
+              {directConversationConfirm.action === "delete"
+                ? "DELETE CHAT"
+                : directConversationConfirm.action === "unblock"
+                  ? "UNBLOCK STUDENT"
+                  : "BLOCK STUDENT"}
+            </span>
+
+            <h3 id="direct-conversation-confirm-title">
+              {directConversationConfirm.action === "delete"
+                ? `Delete chat with ${directConversationConfirm.userName}?`
+                : directConversationConfirm.action === "unblock"
+                  ? `Unblock ${directConversationConfirm.userName}?`
+                  : `Block ${directConversationConfirm.userName}?`}
+            </h3>
+
+            <p>
+              {directConversationConfirm.action === "delete"
+                ? "This removes the conversation from your Messages list only. The other student keeps their copy."
+                : directConversationConfirm.action === "unblock"
+                  ? "You will be able to message this student again unless they have blocked you."
+                  : "You will no longer be able to send messages to this student. Existing messages are not deleted."}
+            </p>
+
+            <div className="team-confirm-actions">
+              <button type="button" className="team-confirm-cancel" onClick={() => setDirectConversationConfirm(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={directConversationConfirm.action === "unblock" ? "primary-button" : "team-confirm-danger"}
+                onClick={executeDirectConversationAction}
+              >
+                {directConversationConfirm.action === "delete"
+                  ? "Delete for Me"
+                  : directConversationConfirm.action === "unblock"
+                    ? "Unblock Student"
+                    : "Block Student"}
+              </button>
             </div>
           </div>
         </div>
@@ -13372,117 +15170,6 @@ try {
     </div>
   </div>
 )}
-{selectedEvent && (
-  <div className="hackathon-modal-overlay">
-    <div className="hackathon-modal event-modal">
-      <button
-        type="button"
-        className="hackathon-modal-close"
-        onClick={() => setSelectedEvent(null)}
-        aria-label="Close event details"
-      >
-        <X size={18} />
-      </button>
-
-      <div className="hackathon-modal-icon">
-        {(() => {
-          const EventIcon = getDataIcon(selectedEvent.icon, CalendarDays);
-          return <EventIcon size={28} />;
-        })()}
-      </div>
-
-      <span className="eyebrow">UPCOMING EVENT</span>
-
-      <h2>{selectedEvent.title || selectedEvent.name}</h2>
-
-      <p className="hackathon-modal-description">
-        Join this upcoming campus event and connect with other students.
-      </p>
-
-      <div className="event-detail-info">
-        <div>
-          <CalendarDays size={16} />
-          <span>{selectedEvent.date || "Date TBA"}</span>
-        </div>
-
-        <div>
-          <Clock3 size={16} />
-          <span>{selectedEvent.time || "Time TBA"}</span>
-        </div>
-      </div>
-
-      <div
-        className="hackathon-modal-actions"
-        style={{ justifyContent: "center", gap: "12px" }}
-      >
-        <button
-          type="button"
-          className="secondary-button"
-          onClick={() => {
-            setSelectedEvent(null);
-            setSearchCategory("students");
-            setSearchText("");
-            setTeammateDepartmentFilter("");
-            setTeammateYearFilter("");
-            setTeammateSkillFilter("");
-            setSearchOpen(true);
-          }}
-        >
-          <Users size={17} />
-          Find Teammates
-        </button>
-
-        {getOpportunityOfficialUrl(selectedEvent) ? (
-          <a
-            className="primary-button official-opportunity-button"
-            href={getOpportunityOfficialUrl(selectedEvent)}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <ExternalLink size={16} />
-            Official Website
-          </a>
-        ) : (
-          <button
-            type="button"
-            className="primary-button official-opportunity-button"
-            onClick={() =>
-              showActionToast(
-                "The organizer has not added an official website link yet."
-              )
-            }
-          >
-            <ExternalLink size={16} />
-            Official Website
-          </button>
-        )}
-
-        {getEventDashboardUrl(selectedEvent) && (
-          <a
-            className="secondary-button official-opportunity-button"
-            href={getEventDashboardUrl(selectedEvent)}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <ExternalLink size={16} />
-            Source Dashboard
-          </a>
-        )}
-      </div>
-
-      <p
-        style={{
-          margin: "12px 0 0",
-          textAlign: "center",
-          fontSize: "11px",
-          opacity: 0.62,
-        }}
-      >
-        CampusConnect helps you discover and save events. Official registration is handled by the event organizer.
-      </p>
-    </div>
-  </div>
-)}
 
   </main>
 {shareSuccess && (
@@ -13506,9 +15193,9 @@ try {
   </div>
 )}
 {actionToast && (
-  <div className="success-toast">
+  <div className={`success-toast ${actionToastTone === "error" ? "action-error-toast" : ""}`}>
     <div className="success-toast-icon">
-      <CheckCircle2 size={18} />
+      {actionToastTone === "error" ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
     </div>
 
     <div className="success-toast-content">
@@ -13518,7 +15205,10 @@ try {
 
     <button
       type="button"
-      onClick={() => setActionToast("")}
+      onClick={() => {
+        setActionToast("");
+        setActionToastTone("success");
+      }}
       aria-label="Close notification"
     >
       ×

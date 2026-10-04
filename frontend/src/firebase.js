@@ -1,8 +1,7 @@
 import { initializeApp } from "firebase/app";
-
 import { getAuth } from "firebase/auth";
-
 import { getFirestore } from "firebase/firestore";
+import { getFunctions } from "firebase/functions";
 
 import {
   initializeAppCheck,
@@ -11,7 +10,6 @@ import {
 
 const firebaseConfig = {
   apiKey: "AIzaSyBEk9Bxh0qPUwlInkchDAO7Xg7yBhAcND8",
-
   authDomain: "campus-connect28.firebaseapp.com",
   projectId: "campus-connect28",
   storageBucket: "campus-connect28.firebasestorage.app",
@@ -23,8 +21,11 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 
 const auth = getAuth(app);
-
 const db = getFirestore(app);
+
+// Your current getImageKitAuth function does not specify a region,
+// so Firebase uses us-central1 by default.
+const functions = getFunctions(app, "us-central1");
 
 let appCheck = null;
 
@@ -38,6 +39,5 @@ if (recaptchaSiteKey) {
   });
 }
 
-export { auth, db, appCheck };
-
+export { auth, db, functions, appCheck };
 export default app;

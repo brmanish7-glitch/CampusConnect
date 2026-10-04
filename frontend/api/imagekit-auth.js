@@ -89,23 +89,50 @@ module.exports = async function handler(
   request,
   response
 ) {
-  response.setHeader(
-  "Access-Control-Allow-Origin",
-  "https://campus-connect28.web.app"
-);
-response.setHeader(
-  "Access-Control-Allow-Headers",
-  "Authorization, Content-Type"
-);
-response.setHeader(
-  "Access-Control-Allow-Methods",
-  "GET, OPTIONS"
-);
+  // Allow only the production site and Vite localhost during development.
+  // Never use "*" because this endpoint requires an authenticated user token.
+  const allowedOrigins = new Set([
+    "https://campus-connect28.web.app",
+    "http://localhost:5173",
+    "http://10.150.203.243:5173",
+  ]);
 
-if (request.method === "OPTIONS") {
-  response.statusCode = 204;
-  return response.end();
-}
+  const requestOrigin = request.headers.origin || "";
+
+  if (
+    requestOrigin &&
+    allowedOrigins.has(requestOrigin)
+  ) {
+    response.setHeader(
+      "Access-Control-Allow-Origin",
+      requestOrigin
+    );
+  }
+
+  response.setHeader("Vary", "Origin");
+  response.setHeader(
+    "Access-Control-Allow-Headers",
+    "Authorization, Content-Type, Accept"
+  );
+  response.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, OPTIONS"
+  );
+
+  if (request.method === "OPTIONS") {
+    if (
+      requestOrigin &&
+      !allowedOrigins.has(requestOrigin)
+    ) {
+      return sendJson(response, 403, {
+        error: "Origin not allowed.",
+      });
+    }
+
+    response.statusCode = 204;
+    return response.end();
+  }
+
   if (request.method !== "GET") {
     return sendJson(response, 405, {
       error: "Method not allowed",
