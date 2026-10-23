@@ -7,6 +7,9 @@ import {
   Users,
   BookOpen,
   User,
+  UserRound,
+  Settings,
+  LogOut,
   Bell,
   Sun,
   Search,
@@ -2202,6 +2205,10 @@ const teamChatMessagesEndRef = useRef(null);
 const [directConversations, setDirectConversations] = useState([]);
 const [directConversationsLoading, setDirectConversationsLoading] = useState(false);
 const [directConversation, setDirectConversation] = useState(null);
+// Canonical user profiles for people involved in direct messages, connections,
+// pending message requests, and the blocked list. Conversation memberProfiles
+// are historical snapshots, so they must not override the current users profile.
+const [directParticipantProfiles, setDirectParticipantProfiles] = useState({});
 const [directMessages, setDirectMessages] = useState([]);
 const [directMessagesLoading, setDirectMessagesLoading] = useState(false);
 const [directMessageInput, setDirectMessageInput] = useState("");
@@ -2213,6 +2220,12 @@ const [directMessageReportReason, setDirectMessageReportReason] = useState("");
 const [directMessageReportDescription, setDirectMessageReportDescription] = useState("");
 const [directMessageReportSubmitting, setDirectMessageReportSubmitting] = useState(false);
 const [directMessageMenu, setDirectMessageMenu] = useState(null);
+const [messageRequestTarget, setMessageRequestTarget] = useState(null);
+const [messageRequestDraft, setMessageRequestDraft] = useState("");
+const [messageRequestSending, setMessageRequestSending] = useState(false);
+const [messageRequestActionLoading, setMessageRequestActionLoading] = useState(false);
+const [sentDirectMessageRequests, setSentDirectMessageRequests] = useState([]);
+const [receivedDirectMessageRequests, setReceivedDirectMessageRequests] = useState([]);
 
 useEffect(() => {
   if (!directMessageMenu) return undefined;
@@ -2283,8 +2296,30 @@ useEffect(() => {
 
 
 const [blockedUserIds, setBlockedUserIds] = useState([]);
-const [hiddenDirectConversationIds, setHiddenDirectConversationIds] = useState([]);
+const [clearedDirectConversationAt, setClearedDirectConversationAt] = useState({});
 const directMessagesEndRef = useRef(null);
+
+const directMessageRequests = useMemo(() => {
+  const byId = new globalThis.Map();
+  [...sentDirectMessageRequests, ...receivedDirectMessageRequests].forEach((request) => {
+    byId.set(request.id, request);
+  });
+  return Array.from(byId.values()).sort((a, b) => {
+    const aTime = a.createdAt?.toMillis?.() || 0;
+    const bTime = b.createdAt?.toMillis?.() || 0;
+    return bTime - aTime;
+  });
+}, [sentDirectMessageRequests, receivedDirectMessageRequests]);
+
+const incomingDirectMessageRequests = useMemo(
+  () => directMessageRequests.filter((request) =>
+    request.recipientId === authUser?.uid &&
+    request.status === "pending" &&
+    !blockedUserIds.includes(request.senderId)
+  ),
+  [directMessageRequests, authUser?.uid, blockedUserIds]
+);
+
 const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 const [signOutOpen, setSignOutOpen] = useState(false);
 const [communityFilter, setCommunityFilter] = useState("All");
@@ -2388,6 +2423,14 @@ const [registrationSubmitting, setRegistrationSubmitting] = useState(false);
 
 // ================= PHASE 1: REAL FIRESTORE DATA =================
 const [teammates, setTeammates] = useState([]);
+
+const blockedStudentsForMessages = useMemo(
+  () => blockedUserIds.map((id) => {
+    const student = directParticipantProfiles[id] || teammates.find((item) => item.id === id);
+    return student || { id, name: "CampusConnect student", campusConnectId: "" };
+  }),
+  [blockedUserIds, teammates, directParticipantProfiles]
+);
 const [hackathons, setHackathons] = useState([]);
 const [dashboardStats, setDashboardStats] = useState({
   activeStudents: 0,
@@ -2675,6 +2718,12 @@ useEffect(() => {
     async (user) => {
       if (!user) {
         setAuthUser(null);
+        setBlockedUserIds([]);
+        setClearedDirectConversationAt({});
+        setSentDirectMessageRequests([]);
+        setReceivedDirectMessageRequests([]);
+        setDirectConversation(null);
+        setDirectMessages([]);
         setWelcomeOpen(false);
         setWelcomeSaving(false);
         setIdentitySetupOpen(false);
@@ -2754,6 +2803,7 @@ useEffect(() => {
         );
         const derivedNameSequence = emailIdentity?.nameSequence || data?.lockedNameSequence || "";
         const derivedDepartment = emailIdentity?.department || legacyDepartment;
+        const derivedBatchYear = emailIdentity?.batchYear || data?.batchYear || "";
         const derivedYear = getAcademicYearLabelFromBatch(emailIdentity?.batchYear) || data?.year || "";
 
         if (data) {
@@ -2772,6 +2822,7 @@ useEffect(() => {
           const identityPatch = {
             college: CAMPUSCONNECT_COLLEGE,
             department: derivedDepartment,
+            batchYear: derivedBatchYear,
             year: derivedYear,
             lockedNameSequence: derivedNameSequence || data.lockedNameSequence || "",
             identityProfileVersion: IDENTITY_PROFILE_VERSION,
@@ -2781,6 +2832,7 @@ useEffect(() => {
           const identityPatchDiffers =
             data.college !== identityPatch.college ||
             normalizeDepartment(data.department || "") !== normalizeDepartment(identityPatch.department || "") ||
+            data.batchYear !== identityPatch.batchYear ||
             data.year !== identityPatch.year ||
             data.lockedNameSequence !== identityPatch.lockedNameSequence ||
             data.identityProfileVersion !== identityPatch.identityProfileVersion ||
@@ -2802,6 +2854,7 @@ useEffect(() => {
             name: displayName,
             college: CAMPUSCONNECT_COLLEGE,
             department: normalizeDepartment(derivedDepartment),
+            batchYear: derivedBatchYear,
             year: derivedYear,
             bio: data.bio || "",
             skills: data.skills || "",
@@ -2811,9 +2864,7 @@ useEffect(() => {
             identityProfileVersion: IDENTITY_PROFILE_VERSION,
             identitySetupCompleted: !identityNeedsSetup,
             blockedUserIds: Array.isArray(data.blockedUserIds) ? data.blockedUserIds : [],
-            hiddenDirectConversationIds: Array.isArray(data.hiddenDirectConversationIds)
-              ? data.hiddenDirectConversationIds
-              : [],
+            clearedDirectConversationAt: data.clearedDirectConversationAt || {},
           });
 
           setActivityData({
@@ -2823,9 +2874,34 @@ useEffect(() => {
           });
 
           setBlockedUserIds(Array.isArray(data.blockedUserIds) ? data.blockedUserIds : []);
-          setHiddenDirectConversationIds(
-            Array.isArray(data.hiddenDirectConversationIds) ? data.hiddenDirectConversationIds : []
-          );
+
+          // Migrate the previous hide-only implementation to per-user clear timestamps.
+          // This prevents legacy hidden chats from reopening with their old message history.
+          const persistedClearMap = data.clearedDirectConversationAt &&
+            typeof data.clearedDirectConversationAt === "object"
+              ? { ...data.clearedDirectConversationAt }
+              : {};
+          const legacyHiddenIds = Array.isArray(data.hiddenDirectConversationIds)
+            ? data.hiddenDirectConversationIds
+            : [];
+          const legacyIdsToMigrate = legacyHiddenIds.filter((id) => !persistedClearMap[id]);
+          const migrationDate = new Date();
+          legacyIdsToMigrate.forEach((id) => {
+            persistedClearMap[id] = migrationDate;
+          });
+          setClearedDirectConversationAt(persistedClearMap);
+
+          if (legacyHiddenIds.length > 0) {
+            const migrationPatch = { hiddenDirectConversationIds: [] };
+            legacyIdsToMigrate.forEach((id) => {
+              migrationPatch[`clearedDirectConversationAt.${id}`] = serverTimestamp();
+            });
+            try {
+              await updateDoc(profileRef, migrationPatch);
+            } catch (migrationError) {
+              console.error("DIRECT CONVERSATION CLEAR MIGRATION ERROR:", migrationError);
+            }
+          }
 
           if (identityNeedsSetup) {
             identityWelcomePendingRef.current = !data.welcomeSeen;
@@ -2846,6 +2922,7 @@ useEffect(() => {
             email: user.email || "",
             college: CAMPUSCONNECT_COLLEGE,
             department: normalizeDepartment(derivedDepartment),
+            batchYear: emailIdentity?.batchYear || "",
             year: derivedYear,
             bio: "",
             skills: "",
@@ -2858,6 +2935,7 @@ useEffect(() => {
             identitySetupCompleted: false,
             blockedUserIds: [],
             hiddenDirectConversationIds: [],
+            clearedDirectConversationAt: {},
           };
 
           try {
@@ -2872,6 +2950,7 @@ useEffect(() => {
             name: identityName,
             college: CAMPUSCONNECT_COLLEGE,
             department: normalizeDepartment(derivedDepartment),
+            batchYear: emailIdentity?.batchYear || "",
             year: derivedYear,
             bio: "",
             skills: "",
@@ -2881,7 +2960,7 @@ useEffect(() => {
             identityProfileVersion: IDENTITY_PROFILE_VERSION,
             identitySetupCompleted: false,
             blockedUserIds: [],
-            hiddenDirectConversationIds: [],
+            clearedDirectConversationAt: {},
           });
 
           setActivityData({
@@ -4379,6 +4458,27 @@ const getDirectConversationId = (otherUserId) => {
   return `dm_${[authUser.uid, otherUserId].sort().join("_")}`;
 };
 
+const getTimestampMillis = (value) => {
+  if (typeof value?.toMillis === "function") return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value?.seconds === "number") return value.seconds * 1000;
+  return 0;
+};
+
+const getPendingDirectMessageRequest = (studentId) =>
+  directMessageRequests.find((request) =>
+    request.status === "pending" &&
+    ((request.senderId === authUser?.uid && request.recipientId === studentId) ||
+      (request.senderId === studentId && request.recipientId === authUser?.uid))
+  );
+
+const getDirectParticipantDisplayName = (participantId, fallback = "") => {
+  const currentProfile = directParticipantProfiles[participantId] ||
+    teammates.find((person) => person.id === participantId);
+  return currentProfile?.name || fallback || "CIT Student";
+};
+
 const getDirectOtherParticipant = (conversation) => {
   if (!conversation || !authUser?.uid) return null;
 
@@ -4388,24 +4488,61 @@ const getDirectOtherParticipant = (conversation) => {
 
   if (index < 0) return null;
 
-  return conversation.memberProfiles?.[index] || {
-    id: conversation.memberIds[index],
-    name: "CIT Student",
+  const participantId = conversation.memberIds[index];
+  const savedConversationProfile = conversation.memberProfiles?.[index] || {};
+  const currentProfile = directParticipantProfiles[participantId] ||
+    teammates.find((person) => person.id === participantId);
+
+  // Older conversations retain the name captured when they were first opened.
+  // Prefer the current users/{uid} profile whenever available, falling back to
+  // the saved snapshot only if the profile cannot be resolved.
+  return {
+    ...savedConversationProfile,
+    ...(currentProfile || {}),
+    id: participantId,
+    name: currentProfile?.name || savedConversationProfile.name || "CIT Student",
+    campusConnectId: currentProfile?.campusConnectId || savedConversationProfile.campusConnectId || "",
   };
 };
 
 const openDirectConversation = async (student) => {
   if (!authUser || !student?.id || student.id === authUser.uid) return;
 
-  if (blockedUserIds.includes(student.id)) {
-    showActionToast("This student is blocked. Unblock them before starting a conversation.");
+  const conversationId = getDirectConversationId(student.id);
+  const isConnected = Boolean(getConnectionForStudent(student.id));
+
+  // Only connected students can start a normal DM. Anyone else must request access,
+  // even if a legacy conversation shell already exists in Firestore.
+  if (!isConnected) {
+    const existingRequest = getPendingDirectMessageRequest(student.id);
+    setSelectedStudent(null);
+    setSearchOpen(false);
+    setActiveNav("messages");
+
+    requestAnimationFrame(() => {
+      document.getElementById("messages")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+
+    if (existingRequest) {
+      showActionToast(
+        existingRequest.senderId === authUser.uid
+          ? "Your message request is still pending."
+          : "This student has already sent you a message request. Check Message Requests."
+      );
+      return;
+    }
+
+    setMessageRequestTarget(student);
+    setMessageRequestDraft("");
     return;
   }
 
   setDirectMessageOpening(true);
 
   try {
-    const conversationId = getDirectConversationId(student.id);
     const memberIds = [authUser.uid, student.id].sort();
     const memberProfiles = memberIds.map((id) => {
       if (id === authUser.uid) {
@@ -4423,21 +4560,28 @@ const openDirectConversation = async (student) => {
       };
     });
 
-    await setDoc(
-      doc(db, "directConversations", conversationId),
-      {
+    const conversationRef = doc(db, "directConversations", conversationId);
+    const existingSnapshot = await getDoc(conversationRef);
+    let conversationData = {};
+
+    if (!existingSnapshot.exists()) {
+      const newConversationData = {
         memberIds,
         memberProfiles,
         updatedAt: serverTimestamp(),
         createdAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
+      };
+      await setDoc(conversationRef, newConversationData);
+      conversationData = newConversationData;
+    } else {
+      conversationData = existingSnapshot.data() || {};
+    }
 
     setDirectConversation({
       id: conversationId,
+      ...conversationData,
       memberIds,
-      memberProfiles,
+      memberProfiles: conversationData.memberProfiles || memberProfiles,
     });
     setSelectedStudent(null);
     setSearchOpen(false);
@@ -4454,6 +4598,250 @@ const openDirectConversation = async (student) => {
     showActionToast("Unable to open this conversation. Please try again.");
   } finally {
     setDirectMessageOpening(false);
+  }
+};
+
+const submitDirectMessageRequest = async () => {
+  if (!authUser || !messageRequestTarget?.id || messageRequestSending) return;
+
+  const message = messageRequestDraft.trim();
+  if (!message) {
+    showActionToast("Add a short message to send your request.");
+    return;
+  }
+  if (message.length > 2000) {
+    showActionToast("Message requests can be up to 2000 characters.");
+    return;
+  }
+
+  const recipientId = messageRequestTarget.id;
+  const pendingRequest = getPendingDirectMessageRequest(recipientId);
+  if (pendingRequest) {
+    showActionToast("A message request between you is already pending.");
+    setMessageRequestTarget(null);
+    return;
+  }
+
+  setMessageRequestSending(true);
+  try {
+    const recipientSnap = await getDoc(doc(db, "users", recipientId));
+    if (!recipientSnap.exists()) {
+      showActionToast("This student's profile could not be found.");
+      return;
+    }
+
+    const recipientData = recipientSnap.data() || {};
+    const recipientBlockedIds = Array.isArray(recipientData.blockedUserIds)
+      ? recipientData.blockedUserIds
+      : [];
+    if (recipientBlockedIds.includes(authUser.uid)) {
+      showActionToast("You cannot send a message request to this student because they have blocked you.");
+      setMessageRequestTarget(null);
+      return;
+    }
+
+    if (getConnectionForStudent(recipientId)) {
+      setMessageRequestTarget(null);
+      await openDirectConversation({
+        ...messageRequestTarget,
+        name: messageRequestTarget.name || recipientData.name || "CIT Student",
+      });
+      return;
+    }
+
+    const requestRef = await addDoc(collection(db, "directMessageRequests"), {
+      senderId: authUser.uid,
+      senderName: profileData.name || authUser.displayName || "CIT Student",
+      senderCampusConnectId: profileData.campusConnectId || "",
+      recipientId,
+      recipientName: recipientData.name || messageRequestTarget.name || "CIT Student",
+      recipientCampusConnectId: recipientData.campusConnectId || messageRequestTarget.campusConnectId || "",
+      message,
+      status: "pending",
+      createdAt: serverTimestamp(),
+    });
+
+    try {
+      await addDoc(collection(db, "notifications"), {
+        recipientId,
+        actorId: authUser.uid,
+        actorName: profileData.name || authUser.displayName || "CIT Student",
+        type: "direct_message_request",
+        title: "New message request",
+        message: `${profileData.name || "A CIT student"} wants to message you.`,
+        relatedId: requestRef.id,
+        read: false,
+        createdAt: serverTimestamp(),
+      });
+    } catch (notificationError) {
+      // The request itself is already saved; a notification failure must not
+      // leave the composer open and invite the student to submit a duplicate.
+      console.error("MESSAGE REQUEST NOTIFICATION ERROR:", notificationError);
+    }
+
+    setMessageRequestTarget(null);
+    setMessageRequestDraft("");
+    showActionToast("Message request sent. It will appear in their Message Requests section.");
+  } catch (error) {
+    console.error("DIRECT MESSAGE REQUEST ERROR:", error);
+    showActionToast(
+      error?.code === "permission-denied"
+        ? "Firebase denied this request. Check that the latest Firestore rules are published."
+        : "Unable to send the message request. Please try again."
+    );
+  } finally {
+    setMessageRequestSending(false);
+  }
+};
+
+const respondToDirectMessageRequest = async (request, decision) => {
+  if (
+    !authUser ||
+    !request?.id ||
+    request.recipientId !== authUser.uid ||
+    request.status !== "pending" ||
+    !["accepted", "declined"].includes(decision) ||
+    messageRequestActionLoading
+  ) {
+    return;
+  }
+
+  if (decision === "accepted" && blockedUserIds.includes(request.senderId)) {
+    showActionToast("Unblock this student before accepting their message request.");
+    return;
+  }
+
+  setMessageRequestActionLoading(true);
+  try {
+    const requestRef = doc(db, "directMessageRequests", request.id);
+    const senderId = request.senderId;
+    const userIds = [senderId, authUser.uid].sort();
+    const connectionId = `${userIds[0]}_${userIds[1]}`;
+    const conversationId = getDirectConversationId(senderId);
+    const batch = writeBatch(db);
+
+    batch.update(requestRef, {
+      status: decision,
+      respondedAt: serverTimestamp(),
+    });
+
+    if (decision === "accepted") {
+      // Only fetch the sender's user profile here. The connection and conversation
+      // documents may not exist yet; their Firestore read rules intentionally check
+      // participant fields on existing documents, so getDoc() on a missing document
+      // can fail with permission-denied before this batch is committed. We already
+      // maintain live, participant-scoped lists for existing connections/chats.
+      const senderSnap = await getDoc(doc(db, "users", senderId));
+      const senderData = senderSnap.exists() ? senderSnap.data() || {} : {};
+      const existingConnection = connections.find((item) =>
+        Array.isArray(item.userIds) &&
+        item.userIds.includes(senderId) &&
+        item.userIds.includes(authUser.uid)
+      );
+      const existingConversation = directConversations.find(
+        (item) => item.id === conversationId
+      );
+      const memberProfiles = userIds.map((id) => id === authUser.uid
+        ? {
+            id,
+            name: profileData.name || authUser.displayName || "CIT Student",
+            campusConnectId: profileData.campusConnectId || "",
+          }
+        : {
+            id,
+            name: senderData.name || request.senderName || "CIT Student",
+            campusConnectId: senderData.campusConnectId || request.senderCampusConnectId || "",
+          }
+      );
+
+      if (!existingConnection) {
+        batch.set(doc(db, "connections", connectionId), {
+          userIds,
+          userA: userIds[0],
+          userB: userIds[1],
+          createdAt: serverTimestamp(),
+          sourceRequestId: request.id,
+          sourceRequestType: "directMessageRequest",
+        });
+      }
+
+      const conversationData = {
+        memberIds: userIds,
+        memberProfiles: existingConversation?.memberProfiles || memberProfiles,
+        lastMessage: request.message,
+        lastMessageAt: serverTimestamp(),
+        lastSenderId: senderId,
+        updatedAt: serverTimestamp(),
+        unreadCounts: {
+          [authUser.uid]: 0,
+          [senderId]: 0,
+        },
+      };
+      if (!existingConversation) conversationData.createdAt = serverTimestamp();
+
+      batch.set(doc(db, "directConversations", conversationId), conversationData, { merge: true });
+      batch.set(doc(db, "directConversations", conversationId, "messages", `request_${request.id}`), {
+        conversationId,
+        senderId,
+        recipientId: authUser.uid,
+        message: request.message,
+        media: [],
+        senderName: request.senderName || senderData.name || "CIT Student",
+        createdAt: serverTimestamp(),
+        isMessageRequestIntro: true,
+        sourceMessageRequestId: request.id,
+      });
+    }
+
+    batch.set(doc(db, "notifications", `${request.id}_${decision}`), {
+      recipientId: senderId,
+      actorId: authUser.uid,
+      actorName: profileData.name || authUser.displayName || "CIT Student",
+      type: decision === "accepted" ? "direct_message_request_accepted" : "direct_message_request_declined",
+      title: decision === "accepted" ? "Message request accepted" : "Message request declined",
+      message: decision === "accepted"
+        ? `${profileData.name || "A CIT student"} accepted your message request and connected with you.`
+        : `${profileData.name || "A CIT student"} declined your message request.`,
+      relatedId: request.id,
+      read: false,
+      createdAt: serverTimestamp(),
+    });
+
+    await batch.commit();
+    setReceivedDirectMessageRequests((prev) => prev.map((item) =>
+      item.id === request.id ? { ...item, status: decision } : item
+    ));
+
+    if (decision === "accepted") {
+      setConnections((prev) => prev.some((item) => item.id === connectionId)
+        ? prev
+        : [...prev, { id: connectionId, userIds, sourceRequestId: request.id, sourceRequestType: "directMessageRequest", createdAt: new Date() }]
+      );
+      const conversation = {
+        id: conversationId,
+        memberIds: userIds,
+        memberProfiles: userIds.map((id) => id === authUser.uid
+          ? { id, name: profileData.name || "CIT Student", campusConnectId: profileData.campusConnectId || "" }
+          : { id, name: request.senderName || "CIT Student", campusConnectId: request.senderCampusConnectId || "" }
+        ),
+        lastMessage: request.message,
+        lastSenderId: senderId,
+      };
+      setDirectConversations((prev) => [conversation, ...prev.filter((item) => item.id !== conversationId)]);
+      setDirectConversation(conversation);
+      showActionToast(`Request accepted. You are now connected with ${request.senderName || "this student"}.`);
+    } else {
+      showActionToast("Message request declined.");
+    }
+  } catch (error) {
+    console.error("RESPOND TO DIRECT MESSAGE REQUEST ERROR:", error);
+    showActionToast(
+      error?.code === "permission-denied"
+        ? "Firebase denied this action. Check that the updated Firestore rules are published."
+        : "Unable to update this message request. Please try again."
+    );
+  } finally {
+    setMessageRequestActionLoading(false);
   }
 };
 
@@ -4483,9 +4871,9 @@ const connectedStudentsForMessages = useMemo(() => {
       const otherId = Array.isArray(connection.userIds)
         ? connection.userIds.find((id) => id !== authUser.uid)
         : null;
-      if (!otherId || blockedUserIds.includes(otherId)) return null;
+      if (!otherId) return null;
 
-      const person = teammates.find((item) => item.id === otherId);
+      const person = directParticipantProfiles[otherId] || teammates.find((item) => item.id === otherId);
       return person || {
         id: otherId,
         name: "Connected Student",
@@ -4501,7 +4889,7 @@ const connectedStudentsForMessages = useMemo(() => {
         { sensitivity: "base" }
       )
     );
-}, [connections, teammates, directConversations, blockedUserIds, authUser?.uid]);
+}, [connections, teammates, directParticipantProfiles, directConversations, blockedUserIds, authUser?.uid]);
 
 const requestDirectConversationAction = (action) => {
   const target = getDirectConversationTarget();
@@ -4548,12 +4936,23 @@ const executeDirectConversationAction = async () => {
       const conversationId = directConversation?.id;
       if (!conversationId) return;
 
-      await updateDoc(doc(db, "users", authUser.uid), {
-        hiddenDirectConversationIds: arrayUnion(conversationId),
+      const clearedAt = new Date();
+      const ownProfileRef = doc(db, "users", authUser.uid);
+      await updateDoc(ownProfileRef, {
+        [`clearedDirectConversationAt.${conversationId}`]: serverTimestamp(),
+        hiddenDirectConversationIds: arrayRemove(conversationId),
       });
-      setHiddenDirectConversationIds((prev) =>
-        prev.includes(conversationId) ? prev : [...prev, conversationId]
-      );
+      let savedClearedAt = clearedAt;
+      try {
+        const refreshedProfile = await getDoc(ownProfileRef);
+        savedClearedAt = refreshedProfile.data()?.clearedDirectConversationAt?.[conversationId] || clearedAt;
+      } catch (timestampReadError) {
+        console.warn("Unable to refresh the saved clear timestamp; using the local timestamp.", timestampReadError);
+      }
+      setClearedDirectConversationAt((prev) => ({
+        ...prev,
+        [conversationId]: savedClearedAt,
+      }));
       setDirectConversations((prev) =>
         prev.filter((conversation) => conversation.id !== conversationId)
       );
@@ -4563,7 +4962,7 @@ const executeDirectConversationAction = async () => {
       setDirectMessages([]);
       setDirectMessageInput("");
       setDirectMessageMediaFiles([]);
-      showActionToast("Conversation deleted for you.");
+      showActionToast("Conversation cleared for you. Earlier messages are hidden from your history.");
     }
   } catch (error) {
     console.error("DIRECT CONVERSATION ACTION ERROR:", error);
@@ -4572,7 +4971,7 @@ const executeDirectConversationAction = async () => {
         ? "Unable to block this student."
         : action === "unblock"
           ? "Unable to unblock this student."
-          : "Unable to delete this conversation."
+          : "Unable to clear this conversation."
     );
   }
 };
@@ -4647,8 +5046,8 @@ const sendDirectMessage = async () => {
   const otherParticipant = getDirectOtherParticipant(directConversation);
   if (!otherParticipant?.id) return;
 
-  if (blockedUserIds.includes(otherParticipant.id)) {
-    showActionToast("Unblock this student before sending messages.");
+  if (!getConnectionForStudent(otherParticipant.id)) {
+    showActionToast("You are not connected with this student. Open their profile to send a message request.");
     return;
   }
 
@@ -6356,6 +6755,50 @@ useEffect(() => {
   return () => unsubscribe();
 }, [teamChatOpen, teamChatTeam?.id, authUser]);
 
+// Keep incoming and outgoing message requests live across refreshes and other users' actions.
+useEffect(() => {
+  if (!authUser?.uid) {
+    setSentDirectMessageRequests([]);
+    setReceivedDirectMessageRequests([]);
+    return undefined;
+  }
+
+  const sentQuery = query(
+    collection(db, "directMessageRequests"),
+    where("senderId", "==", authUser.uid)
+  );
+  const receivedQuery = query(
+    collection(db, "directMessageRequests"),
+    where("recipientId", "==", authUser.uid)
+  );
+
+  const unsubscribeSent = onSnapshot(
+    sentQuery,
+    (snapshot) => setSentDirectMessageRequests(
+      snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))
+    ),
+    (error) => {
+      console.error("SENT MESSAGE REQUESTS LISTENER ERROR:", error);
+      setSentDirectMessageRequests([]);
+    }
+  );
+  const unsubscribeReceived = onSnapshot(
+    receivedQuery,
+    (snapshot) => setReceivedDirectMessageRequests(
+      snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))
+    ),
+    (error) => {
+      console.error("RECEIVED MESSAGE REQUESTS LISTENER ERROR:", error);
+      setReceivedDirectMessageRequests([]);
+    }
+  );
+
+  return () => {
+    unsubscribeSent();
+    unsubscribeReceived();
+  };
+}, [authUser?.uid]);
+
 // Live list of the signed-in student's direct conversations.
 useEffect(() => {
   if (!authUser) {
@@ -6385,9 +6828,11 @@ useEffect(() => {
           return bTime - aTime;
         });
 
-      const visibleConversations = conversations.filter(
-        (conversation) => !hiddenDirectConversationIds.includes(conversation.id)
-      );
+      const visibleConversations = conversations.filter((conversation) => {
+        const clearedAt = getTimestampMillis(clearedDirectConversationAt[conversation.id]);
+        const latestMessageAt = getTimestampMillis(conversation.lastMessageAt);
+        return !clearedAt || latestMessageAt > clearedAt;
+      });
       setDirectConversations(visibleConversations);
       setDirectConversationsLoading(false);
     },
@@ -6399,7 +6844,106 @@ useEffect(() => {
   );
 
   return () => unsubscribe();
-}, [authUser, hiddenDirectConversationIds]);
+}, [authUser, clearedDirectConversationAt]);
+
+// Listen to current profile documents for people displayed in Messages. This
+// keeps old conversation titles, blocked-student rows, connected-student rows,
+// and pending request sender names in sync when a student updates their profile.
+const directParticipantProfileIds = useMemo(() => {
+  if (!authUser?.uid) return [];
+
+  const ids = [];
+  const addOtherParticipant = (memberIds) => {
+    if (!Array.isArray(memberIds)) return;
+    memberIds.forEach((id) => {
+      if (typeof id === "string" && id && id !== authUser.uid) ids.push(id);
+    });
+  };
+
+  directConversations.forEach((conversation) => addOtherParticipant(conversation.memberIds));
+  addOtherParticipant(directConversation?.memberIds);
+  connections.forEach((connection) => addOtherParticipant(connection.userIds));
+  blockedUserIds.forEach((id) => {
+    if (typeof id === "string" && id && id !== authUser.uid) ids.push(id);
+  });
+  directMessageRequests.forEach((request) => {
+    if (request.status !== "pending") return;
+    if (request.senderId && request.senderId !== authUser.uid) ids.push(request.senderId);
+    if (request.recipientId && request.recipientId !== authUser.uid) ids.push(request.recipientId);
+  });
+
+  return [...new Set(ids)].sort();
+}, [
+  authUser?.uid,
+  directConversations,
+  directConversation,
+  connections,
+  blockedUserIds,
+  directMessageRequests,
+]);
+
+const directParticipantProfileIdsKey = JSON.stringify(directParticipantProfileIds);
+
+useEffect(() => {
+  const participantIds = JSON.parse(directParticipantProfileIdsKey || "[]");
+
+  if (!authUser?.uid || participantIds.length === 0) {
+    setDirectParticipantProfiles({});
+    return undefined;
+  }
+
+  // Keep only profiles still relevant to the current account's messaging UI.
+  setDirectParticipantProfiles((previous) => {
+    const next = {};
+    participantIds.forEach((id) => {
+      if (previous[id]) next[id] = previous[id];
+    });
+    return next;
+  });
+
+  const unsubscribers = participantIds.map((participantId) => onSnapshot(
+    doc(db, "users", participantId),
+    (profileSnapshot) => {
+      if (!profileSnapshot.exists()) {
+        setDirectParticipantProfiles((previous) => {
+          if (!previous[participantId]) return previous;
+          const next = { ...previous };
+          delete next[participantId];
+          return next;
+        });
+        return;
+      }
+
+      const profileDataFromFirestore = profileSnapshot.data() || {};
+      const currentName = profileDataFromFirestore.name?.toString().trim() ||
+        profileDataFromFirestore.email?.split("@")[0] || "CIT Student";
+      const currentCampusConnectId = profileDataFromFirestore.campusConnectId || "";
+
+      setDirectParticipantProfiles((previous) => {
+        const existing = previous[participantId];
+        if (
+          existing?.name === currentName &&
+          existing?.campusConnectId === currentCampusConnectId
+        ) {
+          return previous;
+        }
+        return {
+          ...previous,
+          [participantId]: {
+            id: participantId,
+            name: currentName,
+            campusConnectId: currentCampusConnectId,
+          },
+        };
+      });
+    },
+    (error) => {
+      console.error("DIRECT PARTICIPANT PROFILE LISTENER ERROR:", participantId, error);
+    }
+  ));
+
+  return () => unsubscribers.forEach((unsubscribeProfile) => unsubscribeProfile());
+}, [authUser?.uid, directParticipantProfileIdsKey]);
 
 // Live messages for the selected direct conversation.
 useEffect(() => {
@@ -6432,7 +6976,11 @@ useEffect(() => {
           return aTime - bTime;
         });
 
-      setDirectMessages(messages);
+      const clearedAt = getTimestampMillis(clearedDirectConversationAt[directConversation.id]);
+      const visibleMessages = !clearedAt
+        ? messages
+        : messages.filter((message) => getTimestampMillis(message.createdAt) > clearedAt);
+      setDirectMessages(visibleMessages);
       setDirectMessagesLoading(false);
     },
     (error) => {
@@ -6444,7 +6992,7 @@ useEffect(() => {
   );
 
   return () => unsubscribe();
-}, [authUser, directConversation?.id]);
+}, [authUser, directConversation?.id, clearedDirectConversationAt]);
 
 useEffect(() => {
   if (!directConversation?.id || !authUser?.uid || directMessages.length === 0) return;
@@ -8070,6 +8618,7 @@ try {
         email: profileEmail,
         college: CAMPUSCONNECT_COLLEGE,
         department: profileDepartment,
+        batchYear: emailIdentity.batchYear,
         year: profileYear,
         bio: "",
         skills: "",
@@ -8222,6 +8771,11 @@ try {
 }
 
 const profileViewData = viewedProfile || { ...profileData, email: authUser?.email || "" };
+// The student-facing Batch value is derived from the CIT email, never from the editable academic-year label.
+const profileViewBatchYear =
+  getCITEmailIdentity(profileViewData.email)?.batchYear ||
+  profileViewData.batchYear ||
+  "Not detected";
 const profileViewActivity = viewedProfile?.activityData || activityData;
 const viewingOwnProfile = !viewedProfile || viewedProfile.id === authUser?.uid;
 
@@ -8532,8 +9086,8 @@ return (
           </div>
 
           <div className="profile-info-item">
-            <span>YEAR</span>
-            <strong>{profileViewData.year}</strong>
+            <span>BATCH</span>
+            <strong>{profileViewBatchYear}</strong>
           </div>
 
           <div className="profile-info-item">
@@ -9319,7 +9873,19 @@ return (
 
             <div
   className="top-user"
+  role="button"
+  tabIndex={0}
+  aria-label={`Open account menu for ${profileData.name || "student"}`}
+  aria-haspopup="menu"
+  aria-expanded={userMenuOpen}
   onClick={() => setUserMenuOpen((prev) => !prev)}
+  onKeyDown={(event) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      setUserMenuOpen((prev) => !prev);
+    }
+  }}
 >
 <div className="top-avatar">
   {profileData.name.charAt(0).toUpperCase()}
@@ -9332,7 +9898,12 @@ return (
 
               <ChevronDown size={14} />
             {userMenuOpen && (
-  <div className="user-dropdown">
+  <div
+    className="user-dropdown"
+    role="menu"
+    aria-label="Account actions"
+    onClick={(event) => event.stopPropagation()}
+  >
 
     <button
       type="button"
@@ -9344,8 +9915,10 @@ return (
         scrollToPageTop();
       }}
     >
-      <User size={16} />
-      <span>View Profile</span>
+      <span className="user-dropdown-icon" aria-hidden="true">
+        <UserRound size={16} strokeWidth={1.9} />
+      </span>
+      <span className="user-dropdown-label">View Profile</span>
     </button>
 
     <button
@@ -9355,8 +9928,10 @@ return (
   setAccountSettingsOpen(true);
 }}
     >
-      <User size={16} />
-      <span>Account Settings</span>
+      <span className="user-dropdown-icon" aria-hidden="true">
+        <Settings size={16} strokeWidth={1.9} />
+      </span>
+      <span className="user-dropdown-label">Account Settings</span>
     </button>
 
     <div className="user-dropdown-divider" />
@@ -9368,8 +9943,10 @@ return (
   setSignOutOpen(true);
 }}
     >
-      <X size={16} />
-      <span>Sign Out</span>
+      <span className="user-dropdown-icon" aria-hidden="true">
+        <LogOut size={16} strokeWidth={1.9} />
+      </span>
+      <span className="user-dropdown-label">Sign Out</span>
     </button>
 
   </div>
@@ -10533,6 +11110,83 @@ return (
                     <div className="messages-empty-state">Loading conversations...</div>
                   ) : (
                     <>
+                      <div className="messages-request-section">
+                          <div className="messages-request-header">
+                            <div>
+                              <strong>Message Requests</strong>
+                              <span>{incomingDirectMessageRequests.length} pending</span>
+                            </div>
+                          </div>
+                          <div className="messages-request-list">
+                            {incomingDirectMessageRequests.length === 0 ? (
+                              <div className="messages-request-empty">No message requests yet.</div>
+                            ) : incomingDirectMessageRequests.map((request) => (
+                              <div className="messages-request-item" key={request.id}>
+                                <div className="direct-conversation-avatar">
+                                  {getDirectParticipantDisplayName(request.senderId, request.senderName).charAt(0).toUpperCase()}
+                                </div>
+                                <div className="messages-request-copy">
+                                  <strong>{getDirectParticipantDisplayName(request.senderId, request.senderName)}</strong>
+                                  <span>{request.message}</span>
+                                  <div className="messages-request-actions">
+                                    <button
+                                      type="button"
+                                      className="messages-request-accept"
+                                      disabled={messageRequestActionLoading}
+                                      onClick={() => respondToDirectMessageRequest(request, "accepted")}
+                                    >
+                                      <UserCheck size={12} /> Accept
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="messages-request-decline"
+                                      disabled={messageRequestActionLoading}
+                                      onClick={() => respondToDirectMessageRequest(request, "declined")}
+                                    >
+                                      <UserX size={12} /> Decline
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                      {blockedStudentsForMessages.length > 0 && (
+                        <div className="messages-blocked-section">
+                          <div className="messages-blocked-header">
+                            <div>
+                              <strong>Blocked Students</strong>
+                              <span>{blockedStudentsForMessages.length}</span>
+                            </div>
+                          </div>
+                          <div className="messages-blocked-list">
+                            {blockedStudentsForMessages.map((person) => (
+                              <div className="messages-blocked-item" key={person.id}>
+                                <div className="direct-conversation-avatar blocked-avatar">
+                                  {(person.name || "C").charAt(0).toUpperCase()}
+                                </div>
+                                <div className="messages-blocked-copy">
+                                  <strong>{person.name || "CampusConnect student"}</strong>
+                                  <span>{person.campusConnectId || "Blocked by you"}</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setDirectConversationConfirm({
+                                    action: "unblock",
+                                    userId: person.id,
+                                    userName: person.name || "this student",
+                                  })}
+                                  aria-label={`Unblock ${person.name || "student"}`}
+                                >
+                                  Unblock
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       {connectedStudentsForMessages.length > 0 && (
                         <div className="messages-start-section">
                           <div className="messages-start-header">
@@ -10550,7 +11204,7 @@ return (
                                 </div>
                                 <div className="direct-conversation-copy">
                                   <strong>{person.name || "Connected Student"}</strong>
-                                  <span>{person.campusConnectId || "CampusConnect student"}</span>
+                                  <span>{blockedUserIds.includes(person.id) ? "Blocked by you · messaging allowed" : (person.campusConnectId || "CampusConnect student")}</span>
                                 </div>
                                 <button
                                   type="button"
@@ -12489,6 +13143,7 @@ onSubmit={async (e) => {
   const lockedNameSequence = profileData.lockedNameSequence || identity?.nameSequence || "";
   const lockedDepartment = identity?.department || normalizeDepartment(profileData.department || "");
   const lockedYear = getAcademicYearLabelFromBatch(identity?.batchYear) || profileData.year || "";
+  const batchYear = identity?.batchYear || profileData.batchYear || "";
   const rawName = formData.get("name")?.toString() || "";
   const nameValidation = validateLockedNameFormat(rawName, lockedNameSequence);
 
@@ -12501,7 +13156,9 @@ onSubmit={async (e) => {
     name: nameValidation.canonical,
     college: CAMPUSCONNECT_COLLEGE,
     department: lockedDepartment,
-    year: lockedYear,
+    batchYear,
+    // Keep the legacy academic-year label for existing marketplace/team features.
+    year: getAcademicYearLabelFromBatch(batchYear) || lockedYear,
     bio: formData.get("bio")?.toString().trim() || "",
     skills: formData.get("skills")?.toString().trim() || "",
     email: authUser.email || "",
@@ -12671,14 +13328,19 @@ onSubmit={async (e) => {
 </label>
 
 <label>
-  Year
+  Batch
   <input
     type="text"
-    value={profileData.year || "Not detected"}
+    name="batchYear"
+    value={getCITEmailIdentity(authUser?.email)?.batchYear || profileData.batchYear || ""}
     readOnly
     aria-readonly="true"
     className="profile-readonly-input"
+    aria-describedby="batch-year-hint"
   />
+  <span className="profile-locked-hint" id="batch-year-hint">
+    Automatically derived from your CIT email and cannot be edited.
+  </span>
 </label>
 
 <label>
@@ -13456,7 +14118,7 @@ onSubmit={async (e) => {
             <div className="identity-setup-source-card">
               <div><span>College Email</span><strong>{authUser.email}</strong></div>
               <div><span>Department</span><strong>{profileData.department || "Not detected"}</strong></div>
-              <div><span>Current Year</span><strong>{profileData.year || "Not detected"}</strong></div>
+              <div><span>Batch</span><strong>{profileData.batchYear || getCITEmailIdentity(authUser?.email)?.batchYear || "Not detected"}</strong></div>
             </div>
 
             <label className="identity-setup-name-label">
@@ -13528,6 +14190,7 @@ onSubmit={async (e) => {
                 }
 
                 const derivedDepartment = identity?.department || profileData.department || "";
+                const derivedBatchYear = identity?.batchYear || profileData.batchYear || "";
                 const derivedYear = getAcademicYearLabelFromBatch(identity?.batchYear) || profileData.year || "";
                 setIdentitySetupSaving(true);
                 setIdentitySetupError("");
@@ -13539,6 +14202,7 @@ onSubmit={async (e) => {
                       name: validation.canonical,
                       college: CAMPUSCONNECT_COLLEGE,
                       department: derivedDepartment,
+                      batchYear: derivedBatchYear,
                       year: derivedYear,
                       email: authUser.email || "",
                       lockedNameSequence,
@@ -13553,6 +14217,7 @@ onSubmit={async (e) => {
                     name: validation.canonical,
                     college: CAMPUSCONNECT_COLLEGE,
                     department: normalizeDepartment(derivedDepartment),
+                    batchYear: derivedBatchYear,
                     year: derivedYear,
                     email: authUser.email || "",
                     lockedNameSequence,
@@ -14667,6 +15332,72 @@ onSubmit={async (e) => {
         </div>
       )}
 
+      {/* ================= MESSAGE REQUEST COMPOSER ================= */}
+      {messageRequestTarget && (
+        <div
+          className="message-request-modal-overlay"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !messageRequestSending) {
+              setMessageRequestTarget(null);
+              setMessageRequestDraft("");
+            }
+          }}
+        >
+          <div className="message-request-modal" role="dialog" aria-modal="true" aria-labelledby="message-request-modal-title">
+            <button
+              type="button"
+              className="message-request-modal-close"
+              onClick={() => {
+                if (!messageRequestSending) {
+                  setMessageRequestTarget(null);
+                  setMessageRequestDraft("");
+                }
+              }}
+              aria-label="Close message request"
+            >
+              <X size={17} />
+            </button>
+            <div className="message-request-modal-icon"><MessageCircle size={22} /></div>
+            <span className="eyebrow">MESSAGE REQUEST</span>
+            <h3 id="message-request-modal-title">Message {messageRequestTarget.name || "this student"}</h3>
+            <p>You are not connected yet. Send a short message request; if they accept, you will become connections and the chat will open.</p>
+            <label htmlFor="message-request-draft">Your message</label>
+            <textarea
+              id="message-request-draft"
+              value={messageRequestDraft}
+              onChange={(event) => setMessageRequestDraft(event.target.value)}
+              maxLength={2000}
+              rows={4}
+              placeholder="Hi! I'd like to connect with you about..."
+              disabled={messageRequestSending}
+              autoFocus
+            />
+            <div className="message-request-modal-footer">
+              <span>{messageRequestDraft.length}/2000</span>
+              <div>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={messageRequestSending}
+                  onClick={() => {
+                    setMessageRequestTarget(null);
+                    setMessageRequestDraft("");
+                  }}
+                >Cancel</button>
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={messageRequestSending || !messageRequestDraft.trim()}
+                  onClick={submitDirectMessageRequest}
+                >
+                  <Send size={14} /> {messageRequestSending ? "Sending..." : "Send Request"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ================= DIRECT CONVERSATION ACTION CONFIRMATION ================= */}
       {directConversationConfirm && (
         <div
@@ -14692,7 +15423,7 @@ onSubmit={async (e) => {
 
             <span className="eyebrow">
               {directConversationConfirm.action === "delete"
-                ? "DELETE CHAT"
+                ? "CLEAR CONVERSATION"
                 : directConversationConfirm.action === "unblock"
                   ? "UNBLOCK STUDENT"
                   : "BLOCK STUDENT"}
@@ -14700,7 +15431,7 @@ onSubmit={async (e) => {
 
             <h3 id="direct-conversation-confirm-title">
               {directConversationConfirm.action === "delete"
-                ? `Delete chat with ${directConversationConfirm.userName}?`
+                ? `Clear conversation with ${directConversationConfirm.userName}?`
                 : directConversationConfirm.action === "unblock"
                   ? `Unblock ${directConversationConfirm.userName}?`
                   : `Block ${directConversationConfirm.userName}?`}
@@ -14708,7 +15439,7 @@ onSubmit={async (e) => {
 
             <p>
               {directConversationConfirm.action === "delete"
-                ? "This removes the conversation from your Messages list only. The other student keeps their copy."
+                ? "This clears the conversation and hides all earlier text and media from your history. The other student keeps their copy. A new message can make the chat appear again."
                 : directConversationConfirm.action === "unblock"
                   ? "You will be able to message this student again unless they have blocked you."
                   : "You will no longer be able to send messages to this student. Existing messages are not deleted."}
@@ -14724,7 +15455,7 @@ onSubmit={async (e) => {
                 onClick={executeDirectConversationAction}
               >
                 {directConversationConfirm.action === "delete"
-                  ? "Delete for Me"
+                  ? "Clear for Me"
                   : directConversationConfirm.action === "unblock"
                     ? "Unblock Student"
                     : "Block Student"}
@@ -15100,6 +15831,27 @@ onSubmit={async (e) => {
           }}
         >
           View
+        </button>
+      </div>
+
+      {/* SIGN OUT: available from Account Settings on desktop and mobile */}
+      <div className="settings-option settings-option-signout">
+        <div>
+          <strong>Sign Out</strong>
+          <span>
+            Sign out of your CampusConnect account on this device.
+          </span>
+        </div>
+
+        <button
+          type="button"
+          className="settings-action settings-action-danger"
+          onClick={() => {
+            setAccountSettingsOpen(false);
+            setSignOutOpen(true);
+          }}
+        >
+          Sign Out
         </button>
       </div>
 
