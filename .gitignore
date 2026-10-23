@@ -78,4 +78,7 @@ node_modules/
 .dataconnect
 
 .vercel
+
+# Ignore environment files except safe templates
 .env*
+!.env.example
