@@ -94,7 +94,6 @@ module.exports = async function handler(
   const allowedOrigins = new Set([
     "https://campus-connect28.web.app",
     "http://localhost:5173",
-    "http://10.150.203.243:5173",
   ]);
 
   const requestOrigin = request.headers.origin || "";
