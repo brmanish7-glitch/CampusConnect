@@ -82,3 +82,8 @@ node_modules/
 # Ignore environment files except safe templates
 .env*
 !.env.example
+
+# Local debugging files
+/frontend/check-imagekit.cjs
+/frontend/fix-env.cjs
+/frontend/dev-error.txt
